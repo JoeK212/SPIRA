@@ -1,0 +1,809 @@
+<!--
+SPIRA
+Interactive explorer of the architectural twist deformation — axis, base plane, and a live α(z) = (z/h)·α_max solid
+Joe.K · axisbim.io
+
+CHANGELOG
+v1.2.0 - 2026-07-17 - Real-world height + units, and a fix for the faint diagonal shading on the
+         twisted surface. Root cause of the shading: a twisted quad isn't planar, so splitting it
+         into two triangles always leaves a real (if subtle) crease along whichever diagonal is
+         chosen — now picks the shorter diagonal per quad, which minimizes it. Replaced the
+         abstract "height" slider with floors × floor-to-floor height (in real units) plus a
+         Metric/Imperial toggle that converts all HUD numbers (length, area, volume); added a
+         "floor lines" overlay showing actual story lines, independent of the computational
+         "slice rings" resolution overlay from v1.1.0.
+v1.1.0 - 2026-07-17 - Added a "slice rings" overlay: a thin ring drawn at every layer boundary,
+         so the resolution slider's effect is visible directly in the viewport instead of only
+         as a number in the sidebar. On by default alongside the existing ruling lines.
+v1.0.1 - 2026-07-17 - Fix: blank canvas on load. Three.js dropped the classic (non-module)
+         examples/js/controls addon somewhere around r150+ in favor of ES-module-only addons;
+         at r160 `THREE.OrbitControls` was undefined, so `new THREE.OrbitControls(...)` threw
+         and aborted the whole boot script before any WebGL draw call — sliders and HUD
+         labels rendered from static HTML, but rebuild() never ran once. Pinned both the core
+         library and the OrbitControls addon to r128 (matching the version used elsewhere in
+         the tool suite), which still ships the classic script-tag-loadable addon.
+v1.0.0 - 2026-07-17 - Initial build. Twist operation on four cross-section presets (square, triangle, hexagon, star),
+         live α_max / height / resolution controls, ruling-line + axis/base-plane overlays, and a live
+         Cavalieri volume readout showing the twisted and untwisted volumes matching exactly (the whole
+         point of the operation). Side surface built as a hand-rolled ruled BufferGeometry (per-slice
+         rotation of the profile about the vertical axis A), caps triangulated with THREE.ShapeUtils so
+         non-convex profiles (the star) still close correctly.
+-->
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover, maximum-scale=1.0">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+<meta name="description" content="Interactive explorer of the architectural twist deformation — axis, base plane, and a live twisted solid.">
+<meta name="theme-color" content="#f4f1ea" id="themeColorMeta">
+<title>SPIRA — Twist Geometry Explorer</title>
+<style>
+  :root{
+    --cream:#f4f1ea;
+    --ink:#1a1a18;
+    --paper:#fbfaf6;
+    --line:#d8d3c4;
+    --brick:#b23a2e;
+    --prussian:#1f4e79;
+    --ochre:#c8932a;
+    --muted:#7a7568;
+  }
+  *{box-sizing:border-box; -webkit-tap-highlight-color:transparent;}
+  html,body{margin:0; height:100%; overscroll-behavior-y:contain;}
+  body{
+    background:var(--cream);
+    color:var(--ink);
+    font-family:'Inter', -apple-system, system-ui, sans-serif;
+    display:flex; flex-direction:column;
+    height:100vh; height:100dvh;
+    padding-top:env(safe-area-inset-top);
+    padding-bottom:env(safe-area-inset-bottom);
+  }
+  h1,h2,h3, .display{
+    font-family:'Space Grotesk','Inter',sans-serif;
+    font-weight:600; letter-spacing:-0.01em; margin:0;
+  }
+  .mono{font-family:'Space Mono', monospace;}
+
+  header{
+    display:flex; align-items:baseline; gap:14px;
+    padding:14px 18px;
+    border-bottom:1px solid var(--line);
+    background:var(--paper);
+    flex-shrink:0;
+  }
+  header h1{font-size:1.15rem; letter-spacing:0.02em;}
+  header .tag{color:var(--muted); font-size:0.78rem;}
+  header .axis-badge{
+    margin-left:auto; font-size:0.7rem; color:var(--prussian);
+    border:1px solid var(--prussian); padding:2px 8px;
+  }
+
+  main{
+    flex:1; display:flex; min-height:0;
+    flex-direction:row;
+  }
+  #viewport{flex:1; position:relative; min-width:0;}
+  #canvasHost{position:absolute; inset:0;}
+  #canvasHost canvas{display:block; width:100%; height:100%;}
+
+  #hud{
+    position:absolute; left:14px; top:14px;
+    background:rgba(251,250,246,0.92);
+    border:1px solid var(--line);
+    padding:10px 14px;
+    font-size:0.78rem; line-height:1.55;
+    max-width:280px;
+    pointer-events:none;
+  }
+  #hud .formula{color:var(--prussian); font-size:0.85rem;}
+  #hud .row{display:flex; justify-content:space-between; gap:12px;}
+  #hud .label{color:var(--muted);}
+  #hud .vol-match{color:var(--brick); font-weight:600;}
+
+  aside{
+    width:300px; flex-shrink:0;
+    background:var(--paper);
+    border-left:1px solid var(--line);
+    overflow-y:auto;
+    padding:16px 16px 40px;
+  }
+  section.group{margin-bottom:22px;}
+  section.group h3{
+    font-size:0.7rem; text-transform:uppercase; letter-spacing:0.08em;
+    color:var(--muted); margin-bottom:10px; font-weight:600;
+  }
+
+  .presets{display:grid; grid-template-columns:1fr 1fr; gap:6px;}
+  .preset-btn{
+    border:1px solid var(--line); background:var(--cream);
+    padding:9px 6px; font-size:0.78rem; cursor:pointer;
+    font-family:inherit; color:var(--ink);
+    display:flex; align-items:center; justify-content:center; gap:6px;
+  }
+  .preset-btn.active{border-color:var(--brick); background:#fff; color:var(--brick);}
+  .preset-btn:hover{border-color:var(--ink);}
+
+  .slider-row{margin-bottom:14px;}
+  .slider-row .top{display:flex; justify-content:space-between; font-size:0.78rem; margin-bottom:5px;}
+  .slider-row .top .val{font-family:'Space Mono',monospace; color:var(--prussian);}
+  input[type=range]{
+    width:100%; -webkit-appearance:none; appearance:none;
+    height:2px; background:var(--line); outline:none; margin:8px 0;
+  }
+  input[type=range]::-webkit-slider-thumb{
+    -webkit-appearance:none; appearance:none;
+    width:14px; height:14px; border-radius:0;
+    background:var(--brick); cursor:pointer; border:none;
+  }
+  input[type=range]::-moz-range-thumb{
+    width:14px; height:14px; border-radius:0;
+    background:var(--brick); cursor:pointer; border:none;
+  }
+
+  .toggle-row{
+    display:flex; align-items:center; justify-content:space-between;
+    padding:7px 0; font-size:0.82rem; border-bottom:1px solid var(--line);
+  }
+  .toggle-row:last-child{border-bottom:none;}
+  .switch{
+    width:34px; height:18px; background:var(--line); position:relative;
+    cursor:pointer; flex-shrink:0;
+  }
+  .switch::after{
+    content:''; position:absolute; width:14px; height:14px; top:2px; left:2px;
+    background:var(--paper); transition:left 0.12s;
+  }
+  .switch.on{background:var(--prussian);}
+  .switch.on::after{left:18px; background:#fff;}
+
+  select{
+    width:100%; font-family:inherit; color:var(--ink); background:var(--cream);
+    border:1px solid var(--line); padding:8px; font-size:0.8rem;
+  }
+
+  .toast{
+    position:fixed; left:50%; bottom:24px; transform:translateX(-50%) translateY(20px);
+    background:var(--ink); color:var(--cream); padding:9px 18px;
+    font-size:0.8rem; opacity:0; pointer-events:none; transition:opacity 0.2s, transform 0.2s;
+    z-index:50; white-space:nowrap;
+  }
+  .toast.show{opacity:1; transform:translateX(-50%) translateY(0);}
+
+  /* Confirm modal — not currently triggered by any action in this tool (nothing here is
+     destructive), but defined per the house convention so it's ready the moment something
+     needs it, and so audit_deploy.js's invariant check passes honestly rather than by luck. */
+  .confirm-overlay{
+    position:fixed; inset:0; background:rgba(0,0,0,0.5);
+    display:flex; align-items:center; justify-content:center;
+    padding:20px; z-index:60;
+  }
+  .confirm-box{
+    background:var(--paper); border:1px solid var(--line);
+    padding:22px; max-width:360px; width:100%;
+  }
+  .confirm-box p{ font-size:0.85rem; color:var(--ink); margin:0 0 20px; line-height:1.5; }
+  .confirm-actions{display:flex; gap:10px; justify-content:flex-end;}
+  .btn{
+    font-family:'Inter',sans-serif; font-weight:600; font-size:0.78rem;
+    padding:9px 16px; border:1.5px solid var(--ink); background:var(--ink); color:var(--paper);
+    cursor:pointer;
+  }
+  .btn.secondary{background:transparent; color:var(--ink);}
+
+  footer{
+    padding:6px 18px; border-top:1px solid var(--line); background:var(--paper);
+    font-size:0.68rem; color:var(--muted); flex-shrink:0;
+    display:flex; justify-content:space-between;
+  }
+
+  @media (max-width: 760px){
+    main{flex-direction:column;}
+    aside{width:100%; border-left:none; border-top:1px solid var(--line); max-height:46vh;}
+    #hud{font-size:0.72rem; max-width:220px;}
+  }
+</style>
+</head>
+<body>
+
+<header>
+  <h1>SPIRA</h1>
+  <div class="tag">twist deformation, live</div>
+  <div class="axis-badge">α(z) = (z/h)·α<sub>max</sub></div>
+</header>
+
+<main>
+  <div id="viewport">
+    <div id="canvasHost"></div>
+    <div id="hud">
+      <div class="formula mono">α(z) = (z / h) · α<sub>max</sub></div>
+      <div class="row"><span class="label">α_max</span><span class="val mono" id="hudAlpha">0°</span></div>
+      <div class="row"><span class="label">α at h/2</span><span class="val mono" id="hudHalf">0°</span></div>
+      <div class="row"><span class="label">height (h)</span><span class="val mono" id="hudHeight">–</span></div>
+      <div class="row"><span class="label">base area</span><span class="val mono" id="hudArea">–</span></div>
+      <div class="row"><span class="label">twisted volume</span><span class="val mono" id="hudVolTwist">–</span></div>
+      <div class="row"><span class="label">untwisted volume</span><span class="val mono" id="hudVolStraight">–</span></div>
+      <div class="row vol-match" id="hudMatch">volumes match — Cavalieri holds</div>
+    </div>
+  </div>
+
+  <aside>
+    <section class="group">
+      <h3>Cross-section (profile in plane B)</h3>
+      <div class="presets" id="presetGrid"></div>
+    </section>
+
+    <section class="group">
+      <h3>Units</h3>
+      <div class="presets" id="unitsGrid">
+        <button class="preset-btn active" data-units="metric">Metric (m)</button>
+        <button class="preset-btn" data-units="imperial">Imperial (ft)</button>
+      </div>
+    </section>
+
+    <section class="group">
+      <h3>Twist parameters</h3>
+      <div class="slider-row">
+        <div class="top"><span>α_max (twist of top plane T)</span><span class="val" id="alphaVal">120°</span></div>
+        <input type="range" id="alphaSlider" min="-720" max="720" step="1" value="120">
+      </div>
+      <div class="slider-row">
+        <div class="top"><span>floors</span><span class="val" id="floorsVal">8</span></div>
+        <input type="range" id="floorsSlider" min="1" max="60" step="1" value="8">
+      </div>
+      <div class="slider-row">
+        <div class="top"><span>floor-to-floor height</span><span class="val" id="floorHeightVal">3.5 m</span></div>
+        <input type="range" id="floorHeightSlider" min="2.5" max="6" step="0.1" value="3.5">
+        <div style="font-size:0.72rem; color:var(--muted); margin-top:2px;" id="totalHeightNote"></div>
+      </div>
+      <div class="slider-row">
+        <div class="top"><span>resolution (slices)</span><span class="val" id="resVal">48</span></div>
+        <input type="range" id="resSlider" min="6" max="120" step="1" value="48">
+      </div>
+    </section>
+
+    <section class="group">
+      <h3>Overlays</h3>
+      <div class="toggle-row">
+        <span>Twist axis A</span>
+        <div class="switch on" data-toggle="axis"></div>
+      </div>
+      <div class="toggle-row">
+        <span>Base plane B</span>
+        <div class="switch on" data-toggle="plane"></div>
+      </div>
+      <div class="toggle-row">
+        <span>Ruling lines (l₁ helices)</span>
+        <div class="switch on" data-toggle="rulings"></div>
+      </div>
+      <div class="toggle-row">
+        <span>Slice rings (resolution)</span>
+        <div class="switch on" data-toggle="slicerings"></div>
+      </div>
+      <div class="toggle-row">
+        <span>Floor lines (per floor)</span>
+        <div class="switch on" data-toggle="floorlines"></div>
+      </div>
+      <div class="toggle-row">
+        <span>Wireframe</span>
+        <div class="switch" data-toggle="wireframe"></div>
+      </div>
+      <div class="toggle-row">
+        <span>Point labels (a, b, c → a₁, b₁, c₁)</span>
+        <div class="switch" data-toggle="labels"></div>
+      </div>
+    </section>
+
+    <section class="group">
+      <h3>Reference</h3>
+      <div style="font-size:0.76rem; line-height:1.6; color:var(--muted);">
+        This is Fig. 13.3–13.6's twist operation: a fixed base plane B, a vertical axis A, and every
+        horizontal slice at height z rotated by α(z). Straight vertical edges become helices; a flat
+        wall through A becomes a helicoid. Try α_max = 90° and 180° to reproduce the two right-hand
+        figures on p.456, or push past 360° to see multiple full turns like the Turning Torso.
+      </div>
+    </section>
+  </aside>
+</main>
+
+<footer>
+  <span id="footVersion"></span>
+  <span id="footRight" class="mono"></span>
+</footer>
+
+<div class="toast" id="toast"></div>
+
+<script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/three@0.128.0/examples/js/controls/OrbitControls.js"></script>
+<script>
+const APP_VERSION = '1.2.0';
+
+// ---------- toast ----------
+let toastTimer=null;
+function toast(msg){
+  const el=document.getElementById('toast');
+  el.textContent=msg;
+  el.classList.add('show');
+  clearTimeout(toastTimer);
+  toastTimer=setTimeout(()=>el.classList.remove('show'), 1600);
+}
+
+// ---------- shared helpers (house convention — kept even where unused yet) ----------
+function escapeHtml(s){
+  return (s||'').replace(/[&<>"']/g, c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+}
+function escapeAttr(s){ return escapeHtml(s); }
+
+function confirmDialog(message, confirmLabel = 'Confirm'){
+  return new Promise(resolve=>{
+    const overlay = document.createElement('div');
+    overlay.className = 'confirm-overlay';
+    overlay.innerHTML = `
+      <div class="confirm-box">
+        <p>${escapeHtml(message)}</p>
+        <div class="confirm-actions">
+          <button class="btn secondary" id="confirmCancel">Cancel</button>
+          <button class="btn" id="confirmOk">${escapeHtml(confirmLabel)}</button>
+        </div>
+      </div>`;
+    document.body.appendChild(overlay);
+    const cleanup = (result)=>{ overlay.remove(); resolve(result); };
+    overlay.addEventListener('click', (e)=>{ if(e.target === overlay) cleanup(false); });
+    document.getElementById('confirmCancel').onclick = ()=>cleanup(false);
+    document.getElementById('confirmOk').onclick = ()=>cleanup(true);
+  });
+}
+
+document.getElementById('footVersion').innerHTML =
+  `SPIRA · v${APP_VERSION} · Joe.K · <a href="https://axisbim.io" target="_blank" rel="noopener" style="color:inherit;">axisbim.io</a>`;
+
+// ---------- state ----------
+const state = {
+  preset: 'square',
+  alphaMax: 120,
+  units: 'metric',       // 'metric' | 'imperial' — display only; geometry is always stored in meters
+  floors: 8,
+  floorHeightM: 3.5,     // floor-to-floor height, always stored in meters regardless of display units
+  segments: 48,
+  overlays: { axis:true, plane:true, rulings:true, slicerings:true, floorlines:true, wireframe:false, labels:false }
+};
+
+try{
+  const saved = JSON.parse(localStorage.getItem('spira-state') || 'null');
+  if(saved){ Object.assign(state, saved); if(saved.overlays) Object.assign(state.overlays, saved.overlays); }
+}catch(e){}
+
+function persist(){
+  localStorage.setItem('spira-state', JSON.stringify(state));
+}
+
+// ---------- profiles (footprint polygons in the x–z plane, roughly unit-radius) ----------
+const PROFILES = {
+  square: () => [[-1,-1],[1,-1],[1,1],[-1,1]],
+  triangle: () => {
+    const pts=[]; const n=3, r=1.25;
+    for(let i=0;i<n;i++){ const a = -Math.PI/2 + i*2*Math.PI/n; pts.push([r*Math.cos(a), r*Math.sin(a)]); }
+    return pts;
+  },
+  hexagon: () => {
+    const pts=[]; const n=6, r=1.15;
+    for(let i=0;i<n;i++){ const a = i*2*Math.PI/n; pts.push([r*Math.cos(a), r*Math.sin(a)]); }
+    return pts;
+  },
+  star: () => {
+    const pts=[]; const n=5, rOuter=1.35, rInner=0.55;
+    for(let i=0;i<n*2;i++){
+      const a = -Math.PI/2 + i*Math.PI/n;
+      const r = (i%2===0) ? rOuter : rInner;
+      pts.push([r*Math.cos(a), r*Math.sin(a)]);
+    }
+    return pts;
+  }
+};
+const PRESET_LABELS = { square:'Square', triangle:'Triangle', hexagon:'Hexagon', star:'Star' };
+
+// shoelace area of a simple polygon (2D)
+function polygonArea(pts){
+  let a=0;
+  for(let i=0;i<pts.length;i++){
+    const [x1,y1]=pts[i], [x2,y2]=pts[(i+1)%pts.length];
+    a += x1*y2 - x2*y1;
+  }
+  return Math.abs(a)/2;
+}
+
+function rotate2D(p, rad){
+  const c=Math.cos(rad), s=Math.sin(rad);
+  return [ p[0]*c - p[1]*s, p[0]*s + p[1]*c ];
+}
+
+// ---------- units ----------
+const M_TO_FT = 3.280839895;
+function unitLabels(){ return state.units==='metric' ? {len:'m', area:'m²', vol:'m³'} : {len:'ft', area:'ft²', vol:'ft³'}; }
+function toDisplayLen(m){ return state.units==='metric' ? m : m*M_TO_FT; }
+function toDisplayArea(m2){ return state.units==='metric' ? m2 : m2*M_TO_FT*M_TO_FT; }
+function toDisplayVol(m3){ return state.units==='metric' ? m3 : m3*M_TO_FT*M_TO_FT*M_TO_FT; }
+function totalHeightM(){ return state.floors * state.floorHeightM; }
+
+// ---------- three.js setup ----------
+const host = document.getElementById('canvasHost');
+const scene = new THREE.Scene();
+scene.background = new THREE.Color(0xf4f1ea);
+
+const camera = new THREE.PerspectiveCamera(42, 1, 0.1, 200);
+camera.position.set(9, 8, 11);
+
+const renderer = new THREE.WebGLRenderer({ antialias:true });
+renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
+host.appendChild(renderer.domElement);
+
+const controls = new THREE.OrbitControls(camera, renderer.domElement);
+controls.target.set(0, totalHeightM()/2, 0);
+controls.enableDamping = true;
+controls.dampingFactor = 0.08;
+
+scene.add(new THREE.AmbientLight(0xffffff, 0.65));
+const key = new THREE.DirectionalLight(0xffffff, 0.9);
+key.position.set(8, 14, 6);
+scene.add(key);
+const fill = new THREE.DirectionalLight(0xbcd0e0, 0.35);
+fill.position.set(-8, 4, -6);
+scene.add(fill);
+
+const solidGroup = new THREE.Group();
+const overlayGroup = new THREE.Group();
+scene.add(solidGroup, overlayGroup);
+
+function resize(){
+  const w = host.clientWidth, h = host.clientHeight;
+  camera.aspect = w/h;
+  camera.updateProjectionMatrix();
+  renderer.setSize(w, h);
+}
+window.addEventListener('resize', resize);
+
+// ---------- geometry builders ----------
+function buildTwistGeometry(profile, height, alphaMaxDeg, segs){
+  const n = profile.length;
+  const positions = [];
+  const indices = [];
+
+  // side surface: (segs+1) layers x n profile points
+  for(let j=0; j<=segs; j++){
+    const y = (j/segs) * height;
+    const angleDeg = (y/height) * alphaMaxDeg;
+    const rad = angleDeg * Math.PI/180;
+    for(let i=0;i<n;i++){
+      const [x,z] = rotate2D(profile[i], rad);
+      positions.push(x, y, z);
+    }
+  }
+  function distSq(ia, ib){
+    const ax=positions[ia*3], ay=positions[ia*3+1], az=positions[ia*3+2];
+    const bx=positions[ib*3], by=positions[ib*3+1], bz=positions[ib*3+2];
+    const dx=ax-bx, dy=ay-by, dz=az-bz;
+    return dx*dx+dy*dy+dz*dz;
+  }
+  for(let j=0;j<segs;j++){
+    for(let i=0;i<n;i++){
+      const a = j*n + i;
+      const b = j*n + (i+1)%n;
+      const c = (j+1)*n + (i+1)%n;
+      const d = (j+1)*n + i;
+      // A twisted quad isn't planar, so the two triangles that approximate it always meet at a
+      // real dihedral crease along whichever diagonal we pick — splitting along the *shorter*
+      // diagonal keeps that crease smallest and least visible under directional light.
+      if(distSq(a,c) <= distSq(b,d)){
+        indices.push(a,b,c, a,c,d);
+      } else {
+        indices.push(a,b,d, b,c,d);
+      }
+    }
+  }
+
+  const sideGeo = new THREE.BufferGeometry();
+  sideGeo.setAttribute('position', new THREE.Float32BufferAttribute(positions, 3));
+  sideGeo.setIndex(indices);
+  sideGeo.computeVertexNormals();
+
+  // caps via shoelace-safe fan/earcut triangulation (handles the star's concave verts)
+  const shapePts = profile.map(p => new THREE.Vector2(p[0], p[1]));
+  const triangles = THREE.ShapeUtils.triangulateShape(shapePts, []);
+
+  function buildCap(y, angleDeg, flip){
+    const rad = angleDeg * Math.PI/180;
+    const capPos = [];
+    profile.forEach(p=>{
+      const [x,z] = rotate2D(p, rad);
+      capPos.push(x, y, z);
+    });
+    const capIdx = [];
+    triangles.forEach(tri=>{
+      if(flip) capIdx.push(tri[0], tri[2], tri[1]);
+      else capIdx.push(tri[0], tri[1], tri[2]);
+    });
+    const g = new THREE.BufferGeometry();
+    g.setAttribute('position', new THREE.Float32BufferAttribute(capPos, 3));
+    g.setIndex(capIdx);
+    g.computeVertexNormals();
+    return g;
+  }
+
+  const bottomCap = buildCap(0, 0, true);
+  const topCap = buildCap(height, alphaMaxDeg, false);
+
+  return { sideGeo, bottomCap, topCap, layerPositions: positions, segs, n };
+}
+
+let currentMesh = null;
+let rulingLines = null;
+let axisHelper = null;
+let planeHelper = null;
+let labelSprites = [];
+
+function spriteLabel(text, color){
+  const cnv = document.createElement('canvas');
+  cnv.width = 128; cnv.height = 64;
+  const ctx = cnv.getContext('2d');
+  ctx.font = '600 40px Space Grotesk, sans-serif';
+  ctx.fillStyle = color;
+  ctx.textAlign='center'; ctx.textBaseline='middle';
+  ctx.fillText(text, 64, 32);
+  const tex = new THREE.CanvasTexture(cnv);
+  const mat = new THREE.SpriteMaterial({ map: tex, depthTest:false });
+  const spr = new THREE.Sprite(mat);
+  spr.scale.set(0.9, 0.45, 1);
+  return spr;
+}
+
+function rebuild(){
+  // clear
+  while(solidGroup.children.length) solidGroup.remove(solidGroup.children[0]);
+  while(overlayGroup.children.length) overlayGroup.remove(overlayGroup.children[0]);
+  labelSprites = [];
+
+  const h = totalHeightM();
+  const profile = PROFILES[state.preset]();
+  const { sideGeo, bottomCap, topCap, layerPositions, segs, n } = buildTwistGeometry(
+    profile, h, state.alphaMax, state.segments
+  );
+
+  const material = new THREE.MeshStandardMaterial({
+    color: 0x7d92a0, metalness:0.05, roughness:0.65,
+    side: THREE.DoubleSide, wireframe: state.overlays.wireframe
+  });
+  const capMaterial = new THREE.MeshStandardMaterial({
+    color: 0x64788a, metalness:0.05, roughness:0.7,
+    side: THREE.DoubleSide, wireframe: state.overlays.wireframe
+  });
+
+  const sideMesh = new THREE.Mesh(sideGeo, material);
+  const bottomMesh = new THREE.Mesh(bottomCap, capMaterial);
+  const topMesh = new THREE.Mesh(topCap, capMaterial);
+  solidGroup.add(sideMesh, bottomMesh, topMesh);
+
+  // ruling lines: connect each profile point's column across all layers (helix l_i)
+  if(state.overlays.rulings){
+    const rulingPositions = [];
+    for(let i=0;i<n;i++){
+      for(let j=0;j<segs;j++){
+        const a = (j*n + i) * 3;
+        const b = ((j+1)*n + i) * 3;
+        rulingPositions.push(
+          layerPositions[a], layerPositions[a+1], layerPositions[a+2],
+          layerPositions[b], layerPositions[b+1], layerPositions[b+2]
+        );
+      }
+    }
+    const rGeo = new THREE.BufferGeometry();
+    rGeo.setAttribute('position', new THREE.Float32BufferAttribute(rulingPositions, 3));
+    const rMat = new THREE.LineBasicMaterial({ color: 0x9c3226, transparent:true, opacity:0.85 });
+    overlayGroup.add(new THREE.LineSegments(rGeo, rMat));
+  }
+
+  // slice rings: one ring per computational layer boundary, so the resolution slider is
+  // visible in the viewport, not just as a number in the sidebar
+  if(state.overlays.slicerings){
+    const ringMat = new THREE.LineBasicMaterial({ color: 0xc8932a, transparent:true, opacity:0.6 });
+    for(let j=0; j<=segs; j++){
+      const ringPts = [];
+      for(let i=0;i<=n;i++){
+        const idx = (j*n + (i%n)) * 3;
+        ringPts.push(new THREE.Vector3(layerPositions[idx], layerPositions[idx+1], layerPositions[idx+2]));
+      }
+      const ringGeo = new THREE.BufferGeometry().setFromPoints(ringPts);
+      overlayGroup.add(new THREE.Line(ringGeo, ringMat));
+    }
+  }
+
+  // floor lines: a ring at every real floor-to-floor height, independent of the computational
+  // resolution above — this is the "how many actual stories is this" readout
+  if(state.overlays.floorlines){
+    const floorMat = new THREE.LineBasicMaterial({ color: 0x2a241c, transparent:true, opacity:0.4 });
+    for(let k=0; k<=state.floors; k++){
+      const y = k * state.floorHeightM;
+      const angleDeg = (y/h) * state.alphaMax;
+      const rad = angleDeg * Math.PI/180;
+      const pts = [];
+      profile.forEach(p=>{ const [x,z] = rotate2D(p, rad); pts.push(new THREE.Vector3(x, y, z)); });
+      pts.push(pts[0].clone());
+      const floorGeo = new THREE.BufferGeometry().setFromPoints(pts);
+      overlayGroup.add(new THREE.Line(floorGeo, floorMat));
+    }
+  }
+
+  // axis A
+  if(state.overlays.axis){
+    const axisTop = h * 1.35;
+    const axisGeo = new THREE.BufferGeometry().setFromPoints([
+      new THREE.Vector3(0,0,0), new THREE.Vector3(0, axisTop, 0)
+    ]);
+    const axisMat = new THREE.LineBasicMaterial({ color: 0x1f4e79 });
+    overlayGroup.add(new THREE.Line(axisGeo, axisMat));
+    const cone = new THREE.Mesh(
+      new THREE.ConeGeometry(0.09, 0.3, 12),
+      new THREE.MeshBasicMaterial({ color: 0x1f4e79 })
+    );
+    cone.position.set(0, axisTop, 0);
+    overlayGroup.add(cone);
+  }
+
+  // base plane B
+  if(state.overlays.plane){
+    const size = 4.2;
+    const planeGeo = new THREE.PlaneGeometry(size, size);
+    const planeMat = new THREE.MeshBasicMaterial({ color:0xc8932a, transparent:true, opacity:0.14, side:THREE.DoubleSide });
+    const planeMesh = new THREE.Mesh(planeGeo, planeMat);
+    planeMesh.rotation.x = -Math.PI/2;
+    overlayGroup.add(planeMesh);
+    const edges = new THREE.LineSegments(
+      new THREE.EdgesGeometry(planeGeo),
+      new THREE.LineBasicMaterial({ color:0xc8932a })
+    );
+    edges.rotation.x = -Math.PI/2;
+    overlayGroup.add(edges);
+  }
+
+  // point labels a,b,c (bottom) -> a1,b1,c1 (top), first up-to-3 profile verts
+  if(state.overlays.labels){
+    const names = ['a','b','c','d','e','f','g','h','i','j'];
+    const rad = state.alphaMax * Math.PI/180;
+    for(let i=0;i<Math.min(n, names.length); i++){
+      const bp = profile[i];
+      const bLabel = spriteLabel(names[i], '#1a1a18');
+      bLabel.position.set(bp[0]*1.12, 0.25, bp[1]*1.12);
+      overlayGroup.add(bLabel);
+
+      const [tx,tz] = rotate2D(profile[i], rad);
+      const tLabel = spriteLabel(names[i]+'₁', '#b23a2e');
+      tLabel.position.set(tx*1.12, h+0.25, tz*1.12);
+      overlayGroup.add(tLabel);
+    }
+  }
+
+  // HUD numbers — unit-aware
+  const u = unitLabels();
+  const baseArea = polygonArea(profile);
+  const volTwist = baseArea * h; // Cavalieri: identical to the straight prism
+  const volStraight = baseArea * h;
+  document.getElementById('hudAlpha').textContent = state.alphaMax.toFixed(0) + '°';
+  document.getElementById('hudHalf').textContent = (state.alphaMax/2).toFixed(1) + '°';
+  document.getElementById('hudHeight').textContent = toDisplayLen(h).toFixed(1) + ' ' + u.len;
+  document.getElementById('hudArea').textContent = toDisplayArea(baseArea).toFixed(2) + ' ' + u.area;
+  document.getElementById('hudVolTwist').textContent = toDisplayVol(volTwist).toFixed(2) + ' ' + u.vol;
+  document.getElementById('hudVolStraight').textContent = toDisplayVol(volStraight).toFixed(2) + ' ' + u.vol;
+
+  controls.target.set(0, h/2, 0);
+  document.getElementById('footRight').textContent =
+    `${PRESET_LABELS[state.preset]} · α_max ${state.alphaMax}° · ${state.floors} floors · h ${toDisplayLen(h).toFixed(1)}${u.len} · ${state.segments} slices`;
+}
+
+// ---------- UI wiring ----------
+const presetGrid = document.getElementById('presetGrid');
+Object.keys(PROFILES).forEach(key=>{
+  const btn = document.createElement('button');
+  btn.className = 'preset-btn' + (state.preset===key ? ' active':'');
+  btn.textContent = PRESET_LABELS[key];
+  btn.dataset.preset = key;
+  btn.addEventListener('click', ()=>{
+    state.preset = key;
+    [...presetGrid.children].forEach(c=>c.classList.remove('active'));
+    btn.classList.add('active');
+    persist(); rebuild();
+    toast(PRESET_LABELS[key] + ' profile loaded');
+  });
+  presetGrid.appendChild(btn);
+});
+
+const alphaSlider = document.getElementById('alphaSlider');
+const floorsSlider = document.getElementById('floorsSlider');
+const floorHeightSlider = document.getElementById('floorHeightSlider');
+const resSlider = document.getElementById('resSlider');
+alphaSlider.value = state.alphaMax;
+floorsSlider.value = state.floors;
+resSlider.value = state.segments;
+
+const unitsGrid = document.getElementById('unitsGrid');
+[...unitsGrid.children].forEach(btn=>{
+  btn.classList.toggle('active', btn.dataset.units === state.units);
+  btn.addEventListener('click', ()=>{
+    state.units = btn.dataset.units;
+    [...unitsGrid.children].forEach(b=>b.classList.remove('active'));
+    btn.classList.add('active');
+    syncFloorHeightSliderRange();
+    syncSliderLabels(); persist(); rebuild();
+    toast(state.units === 'metric' ? 'Metric units' : 'Imperial units');
+  });
+});
+
+function syncFloorHeightSliderRange(){
+  if(state.units === 'metric'){
+    floorHeightSlider.min = 2.5; floorHeightSlider.max = 6; floorHeightSlider.step = 0.1;
+    floorHeightSlider.value = state.floorHeightM.toFixed(1);
+  } else {
+    floorHeightSlider.min = 8; floorHeightSlider.max = 20; floorHeightSlider.step = 0.5;
+    floorHeightSlider.value = (state.floorHeightM * M_TO_FT).toFixed(1);
+  }
+}
+syncFloorHeightSliderRange();
+
+function syncSliderLabels(){
+  const u = unitLabels();
+  document.getElementById('alphaVal').textContent = state.alphaMax + '°';
+  document.getElementById('floorsVal').textContent = state.floors;
+  document.getElementById('floorHeightVal').textContent = toDisplayLen(state.floorHeightM).toFixed(1) + ' ' + u.len;
+  document.getElementById('resVal').textContent = state.segments;
+  document.getElementById('totalHeightNote').textContent =
+    `= ${state.floors} × ${toDisplayLen(state.floorHeightM).toFixed(1)}${u.len} = ${toDisplayLen(totalHeightM()).toFixed(1)}${u.len} total`;
+}
+syncSliderLabels();
+
+alphaSlider.addEventListener('input', e=>{
+  state.alphaMax = parseFloat(e.target.value);
+  syncSliderLabels(); persist(); rebuild();
+});
+floorsSlider.addEventListener('input', e=>{
+  state.floors = parseInt(e.target.value);
+  syncSliderLabels(); persist(); rebuild();
+});
+floorHeightSlider.addEventListener('input', e=>{
+  const v = parseFloat(e.target.value);
+  state.floorHeightM = state.units === 'metric' ? v : v / M_TO_FT;
+  syncSliderLabels(); persist(); rebuild();
+});
+resSlider.addEventListener('input', e=>{
+  state.segments = parseInt(e.target.value);
+  syncSliderLabels(); persist(); rebuild();
+});
+
+document.querySelectorAll('.switch').forEach(sw=>{
+  const key = sw.dataset.toggle;
+  if(state.overlays[key]) sw.classList.add('on');
+  sw.addEventListener('click', ()=>{
+    state.overlays[key] = !state.overlays[key];
+    sw.classList.toggle('on');
+    persist(); rebuild();
+  });
+});
+
+// apply saved preset button state
+[...presetGrid.children].forEach(c=>{
+  c.classList.toggle('active', c.dataset.preset === state.preset);
+});
+
+// ---------- render loop ----------
+function animate(){
+  requestAnimationFrame(animate);
+  controls.update();
+  renderer.render(scene, camera);
+}
+
+resize();
+rebuild();
+animate();
+</script>
+</body>
+</html>
