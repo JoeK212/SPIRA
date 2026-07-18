@@ -93,6 +93,11 @@ ribbon/tube exports as an open sheet body. Caps and Shear's side walls export as
 instead of many facets, since they're provably planar; Twist/Taper/Bend/Free/Helix's curved side
 walls stay faceted, since a genuinely curved surface can't be one flat ACIS face.
 
+For a genuinely curved, single-face-per-side result instead — via a native Revit loft/sweep script
+rather than a faceted import — "Export loft profiles (.json)" exports N evenly spaced
+cross-section profiles up the height, meant for a script (e.g. pyRevit) to build a real loft
+through.
+
 Single HTML file, no build step, Three.js (r128) via CDN. Deployed via GitHub → Netlify
 continuous deployment.
 

@@ -4,6 +4,21 @@ Interactive explorer of architectural deformation operations — twisting, taper
 Joe.K · axisbim.io
 
 CHANGELOG
+v1.13.0 - 2026-07-18 - Added "Export loft profiles (.json)" (Export section) — the first piece of
+         a planned pyRevit path for getting a genuinely curved, single-face-per-side form into
+         Revit natively, instead of importing a faceted .sat. Exports N evenly spaced cross-section
+         profiles up the height (N set by a new "loft profiles" slider, deliberately separate from
+         "resolution (slices)": a native Revit loft only needs enough profiles for Revit's own
+         curve fit to converge, not enough flat triangles to look smooth on screen — usually far
+         fewer). Reuses lastBuild + computeLayerPoint directly, the same source of truth the render
+         mesh and the .sat exporter both already use, so a pyRevit script consuming this file can't
+         drift out of sync with what's on screen the way re-deriving the twist/taper/bend math in
+         Python separately would risk. Same Y-up→Z-up axis remap as the .sat exporter. Verified
+         against Twist (bottom profile point unrotated, top point correctly rotated by α_max — the
+         actual rotation math checked by hand, not just record counts) and Helix's open generator
+         (closed:false in the payload, so a consuming script builds an open profile per level
+         instead of a closed loop). The pyRevit script itself — the piece that actually reads this
+         JSON and builds a native Revit loft/sweep — is the next step, not done yet.
 v1.12.2 - 2026-07-18 - Fixed a "pinched"/herringbone shading artifact visible on Bend/Taper (and
          likely any curved mode) at higher resolutions — user spotted diagonal chevron-like light
          patterns across the side faces that didn't correspond to any real edge. Root cause: the
@@ -713,7 +728,23 @@ v1.0.0 - 2026-07-17 - Initial build. Twist operation on four cross-section prese
         Shear/Bend/Free export as a closed solid; Helix's open ribbon/tube exports as an open sheet
         body.
       </div>
+
+      <div class="slider-row" style="margin-top:14px;">
+        <div class="top"><span>loft profiles (for JSON export)</span><span class="val" id="loftProfileCountVal">20</span></div>
+        <input type="range" id="loftProfileCountSlider" min="3" max="60" step="1" value="20">
+      </div>
+      <button class="btn secondary" id="exportLoftJsonBtn" style="width:100%; margin-top:4px;">Export loft profiles (.json)</button>
+      <div style="font-size:0.72rem; line-height:1.5; color:var(--muted); margin-top:6px;">
+        For rebuilding the current form natively in Revit (e.g. via a pyRevit loft/sweep script)
+        instead of importing a faceted .sat. Exports evenly-spaced cross-section profiles up the
+        height — more profiles track a curved operation (Twist/Taper/Bend) more closely, since
+        Revit's own loft fits a true curved surface through them rather than approximating with
+        flat facets. Deliberately a separate count from "resolution (slices)" above: a loft only
+        needs enough profiles for Revit's own curve fit to converge, not enough triangles to look
+        smooth on screen — usually far fewer.
+      </div>
     </section>
+
 
     <section class="group">
       <h3>Reference</h3>
@@ -737,7 +768,7 @@ v1.0.0 - 2026-07-17 - Initial build. Twist operation on four cross-section prese
 <script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
 <script src="https://cdn.jsdelivr.net/npm/three@0.128.0/examples/js/controls/OrbitControls.js"></script>
 <script>
-const APP_VERSION = '1.12.2';
+const APP_VERSION = '1.13.0';
 
 // ---------- toast ----------
 let toastTimer=null;
@@ -882,6 +913,10 @@ const state = {
   floors: 8,
   floorHeightM: 3.5,     // floor-to-floor height, always stored in meters regardless of display units
   segments: 48,
+  loftProfileCount: 20, // profile count for the "loft profiles" JSON export — deliberately separate
+                        // from segments (render/export facet resolution above): a native Revit loft
+                        // only needs enough profiles for its own curve fit to converge, not enough
+                        // to look smooth as flat triangles
   overlays: { axis:true, plane:true, rulings:true, slicerings:true, floorlines:true, wireframe:false, labels:false }
 };
 
@@ -1829,6 +1864,7 @@ const bendBetaSlider = document.getElementById('bendBetaSlider');
 const floorsSlider = document.getElementById('floorsSlider');
 const floorHeightSlider = document.getElementById('floorHeightSlider');
 const resSlider = document.getElementById('resSlider');
+const loftProfileCountSlider = document.getElementById('loftProfileCountSlider');
 const helixTurnsSlider = document.getElementById('helixTurnsSlider');
 const helixPitchSlider = document.getElementById('helixPitchSlider');
 const helixRInnerSlider = document.getElementById('helixRInnerSlider');
@@ -1843,6 +1879,7 @@ taperWSlider.value = state.taperW;
 bendBetaSlider.value = state.bendBetaMax;
 floorsSlider.value = state.floors;
 resSlider.value = state.segments;
+loftProfileCountSlider.value = state.loftProfileCount;
 helixTurnsSlider.value = state.helixTurns;
 
 const REFERENCE_TEXT = {
@@ -2045,6 +2082,7 @@ function syncSliderLabels(){
   document.getElementById('floorsVal').textContent = state.floors;
   document.getElementById('floorHeightVal').textContent = toDisplayLen(state.floorHeightM).toFixed(1) + ' ' + u.len;
   document.getElementById('resVal').textContent = state.segments;
+  document.getElementById('loftProfileCountVal').textContent = state.loftProfileCount;
   document.getElementById('totalHeightNote').textContent =
     `= ${state.floors} × ${toDisplayLen(state.floorHeightM).toFixed(1)}${u.len} = ${toDisplayLen(state.floors*state.floorHeightM).toFixed(1)}${u.len} total`;
   document.getElementById('helixTurnsVal').textContent = state.helixTurns;
@@ -2098,6 +2136,11 @@ floorHeightSlider.addEventListener('input', e=>{
 resSlider.addEventListener('input', e=>{
   state.segments = parseInt(e.target.value);
   syncSliderLabels(); persist(); rebuild();
+});
+loftProfileCountSlider.addEventListener('input', e=>{
+  state.loftProfileCount = parseInt(e.target.value);
+  document.getElementById('loftProfileCountVal').textContent = state.loftProfileCount;
+  persist();
 });
 helixTurnsSlider.addEventListener('input', e=>{
   state.helixTurns = parseInt(e.target.value);
@@ -2489,6 +2532,70 @@ function exportSAT(){
   toast(`Exported .sat — ${result.faceCount.toLocaleString()} faces`);
 }
 document.getElementById('exportSatBtn').addEventListener('click', exportSAT);
+
+// ---------- loft profiles (.json) export ----------
+// A much lighter-weight companion to .sat: instead of a faceted solid, this exports N evenly
+// spaced cross-section profiles up the height, meant to be consumed by a script running inside
+// the target application (e.g. pyRevit) that builds a genuine native loft/sweep through them —
+// letting that application's own kernel fit a true curved surface, rather than approximating one
+// with flat ACIS facets the way .sat has to. Reuses lastBuild + computeLayerPoint, the exact same
+// source of truth the render mesh and the .sat exporter both use, so the sampled profiles are
+// guaranteed to match what's on screen rather than risking a second, drifting implementation of
+// the same math inside whatever script consumes this file.
+function round6(v){ return Math.round(v*1e6)/1e6; }
+
+function buildLoftProfilesJSON(){
+  if(!lastBuild) return null;
+  const { mode, profile, params, h, closed, n } = lastBuild;
+  const N = Math.max(2, state.loftProfileCount);
+  const MM = 1000;
+  const levels = [];
+  for(let k=0;k<N;k++){
+    const t = N === 1 ? 0 : k/(N-1);
+    const y = t*h;
+    const points = profile.map(p=>{
+      const [x, yOut, z] = computeLayerPoint(mode, params, y, h, p);
+      // Same Y-up (Three.js/SPIRA) -> Z-up (Revit/AutoCAD/ACIS) remap the .sat exporter uses:
+      // (x,y,z) -> (x,-z,y), a pure rotation so nothing here needs re-deriving or re-checking.
+      return [ round6(x*MM), round6(-z*MM), round6(yOut*MM) ];
+    });
+    levels.push({ t: round6(t), height_mm: round6(y*MM), points });
+  }
+  const payload = {
+    schema: 'spira-loft-profiles-v1',
+    app_version: APP_VERSION,
+    mode,
+    units: 'mm',
+    axis_convention: 'Z-up (Revit/AutoCAD/ACIS) — remapped from SPIRA internal Y-up via (x,y,z) -> (x,-z,y)',
+    closed,                    // false only for Helix's open 'line' generator — build an open
+                                // polyline/spline per level instead of a closed loop
+    profile_point_count: n,
+    height_mm: round6(h*MM),
+    level_count: N,
+    levels                     // each level: { t, height_mm, points: [[x,y,z], ...] }, points in
+                                // profile order — connect consecutive levels' same-index points as
+                                // loft rail lines if a script wants ruled continuity, or hand each
+                                // level's point loop straight to a loft/sweep API as a profile curve
+  };
+  return { json: JSON.stringify(payload, null, 2), levelCount: N };
+}
+
+function exportLoftProfilesJSON(){
+  const result = buildLoftProfilesJSON();
+  if(!result){ toast('Nothing to export yet'); return; }
+  const blob = new Blob([result.json], {type:'application/json'});
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement('a');
+  const stamp = new Date().toISOString().slice(0,19).replace(/[:T]/g,'-');
+  a.href = url;
+  a.download = `SPIRA_${state.mode}_loftprofiles_${stamp}.json`;
+  document.body.appendChild(a);
+  a.click();
+  document.body.removeChild(a);
+  URL.revokeObjectURL(url);
+  toast(`Exported loft profiles — ${result.levelCount} levels`);
+}
+document.getElementById('exportLoftJsonBtn').addEventListener('click', exportLoftProfilesJSON);
 
 document.getElementById('viewTopBtn').addEventListener('click', ()=>{ frameCameraTop(); toast('Top view'); });
 document.getElementById('viewFrontBtn').addEventListener('click', ()=>{ frameCameraFront(); toast('Front / elevation view'); });
