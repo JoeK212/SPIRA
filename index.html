@@ -4,6 +4,22 @@ Interactive explorer of architectural deformation operations — twisting, taper
 Joe.K · axisbim.io
 
 CHANGELOG
+v1.20.0 - 2026-07-18 - Added a "Surface normals (debug)" overlay, off by default, per user request
+         after a session of chasing normal-orientation bugs (inward-facing Circle/Pipe and Ellipse
+         normals, both caught only via headless Node scripts before shipping). One short outward
+         segment per profile corner per FLOOR (not per resolution slice, which can run past 100 and
+         would be an unreadable haze) — reuses the exact same finite-difference technique the mesh
+         builders themselves use for their own analytic normals, so this is a faithful debug view of
+         what the render mesh is actually doing rather than a separate approximation, and branches
+         the cross-product order the same way buildHelicalGeometry vs. buildDeformedGeometry's own
+         paths do (see existing comments on why they differ) rather than getting Helix backwards.
+         While building it, found and fixed a related latent bug in the existing "Turn lines" overlay
+         (Helix's floor-lines equivalent): it called the raw radial-sweep formula directly instead of
+         the per-mode evaluator, which would have been wrong for the Pipe generator specifically —
+         same bug class fixed for point labels and the loft-profiles exporter in v1.15.0, just missed
+         here since Turn lines predates Pipe. Switched its z-fighting nudge to the generic centroid-
+         based technique slice rings already use (v1.14.2) instead of a profile-coordinate scale that
+         only made sense for the old radial-sweep formula, fixing both issues in one change.
 v1.19.1 - 2026-07-18 - Fixed The Shard's taper — user screenshot showed a needle-thin spike with no
          resemblance to the real building ("very big spire that does not exist"). The v1.19.0
          estimate (taperV=taperW=0.15) was wrong, not just imprecise: SPIRA's Taper is a single
@@ -920,6 +936,10 @@ v1.0.0 - 2026-07-17 - Initial build. Twist operation on four cross-section prese
         <span>Point labels (a, b, c → a₁, b₁, c₁)</span>
         <div class="switch" data-toggle="labels"></div>
       </div>
+      <div class="toggle-row">
+        <span>Surface normals (debug)</span>
+        <div class="switch" data-toggle="normals"></div>
+      </div>
     </section>
 
     <section class="group">
@@ -970,7 +990,7 @@ v1.0.0 - 2026-07-17 - Initial build. Twist operation on four cross-section prese
 <script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
 <script src="https://cdn.jsdelivr.net/npm/three@0.128.0/examples/js/controls/OrbitControls.js"></script>
 <script>
-const APP_VERSION = '1.19.1';
+const APP_VERSION = '1.20.0';
 
 // ---------- toast ----------
 let toastTimer=null;
@@ -1121,7 +1141,7 @@ const state = {
                         // from segments (render/export facet resolution above): a native Revit loft
                         // only needs enough profiles for its own curve fit to converge, not enough
                         // to look smooth as flat triangles
-  overlays: { axis:true, plane:true, rulings:true, slicerings:true, floorlines:true, wireframe:false, labels:false }
+  overlays: { axis:true, plane:true, rulings:true, slicerings:true, floorlines:true, wireframe:false, labels:false, normals:false }
 };
 
 try{
@@ -2032,19 +2052,32 @@ function rebuild(){
   if(state.overlays.floorlines){
     // Paper-white reads as a crisp contour against the blue-gray solid — every other overlay color
     // (brick for rulings, ochre for slice rings, prussian for the axis) is already spoken for, and a
-    // light line pops by brightness contrast rather than competing on hue. The 1.03x nudge pushes the
-    // ring just outside the mesh's own surface (which sits at these exact same coordinates), avoiding
-    // the z-fighting that was making the old dark, coincident line nearly invisible.
+    // light line pops by brightness contrast rather than competing on hue. The nudge pushes the ring
+    // just outside the mesh's own surface (which sits at these exact same coordinates), avoiding the
+    // z-fighting that was making the old dark, coincident line nearly invisible.
     const floorMat = new THREE.LineBasicMaterial({ color: 0xfbfaf6, transparent:true, opacity:0.95 });
     const loopCount = state.mode === 'helix' ? state.helixTurns : state.floors;
     const stepM = state.mode === 'helix' ? state.helixPitchM : state.floorHeightM;
     for(let k=0; k<=loopCount; k++){
       const y = k * stepM;
-      const pts = [];
-      profile.forEach(p=>{
-        const [x,yOut,z] = computeLayerPoint(state.mode, params, y, h, [p[0]*1.03, p[1]*1.03]);
-        pts.push(new THREE.Vector3(x, yOut, z));
-      });
+      let pts;
+      if(state.mode === 'helix'){
+        // layerPointFn (not computeLayerPoint directly) so this is correct for Pipe too — Pipe's
+        // genPt is a bare angle, not a [radial, height-offset] pair, so the *1.03 profile-scale
+        // nudge the non-helix branch below uses would silently rotate the ring instead of pushing
+        // it outward. A generic centroid-based nudge (same technique the slice-rings overlay uses,
+        // v1.14.2) works the same way regardless of which generator built the ring.
+        const raw = profile.map(p => { const [x,yOut,z] = layerPointFn(y, p); return new THREE.Vector3(x,yOut,z); });
+        const centroid = new THREE.Vector3();
+        raw.forEach(v => centroid.add(v));
+        centroid.divideScalar(raw.length);
+        pts = raw.map(v => v.clone().add(new THREE.Vector3().subVectors(v, centroid).multiplyScalar(0.02)));
+      } else {
+        pts = profile.map(p => {
+          const [x,yOut,z] = computeLayerPoint(state.mode, params, y, h, [p[0]*1.03, p[1]*1.03]);
+          return new THREE.Vector3(x, yOut, z);
+        });
+      }
       pts.push(pts[0].clone());
       const floorGeo = new THREE.BufferGeometry().setFromPoints(pts);
       overlayGroup.add(new THREE.Line(floorGeo, floorMat));
@@ -2167,6 +2200,49 @@ function rebuild(){
       tLabel.position.set(tx*1.12, tyOut+0.25, tz*1.12);
       overlayGroup.add(tLabel);
     }
+  }
+
+  // Debug/pedagogical overlay: one short outward-pointing segment per profile corner per FLOOR (not
+  // per resolution slice — resolution can run past 100, which would be an unreadable haze). Reuses
+  // the exact same finite-difference technique the mesh builders themselves use for their own
+  // analytic normals (v1.14.3 for twist/taper/shear/bend/ffd, v1.17.1 for helix, v1.18.0 for
+  // ellipse), rather than a separate approximation — this overlay is meant to show what the render
+  // mesh is actually doing, corners included, not a simplified stand-in for it.
+  if(state.overlays.normals){
+    const normalMat = new THREE.LineBasicMaterial({ color: 0xd4820a });
+    const normalLen = Math.max(h*0.03, 0.4);
+    const loopCount = state.mode === 'helix' ? state.helixTurns : state.floors;
+    const stepM = state.mode === 'helix' ? state.helixPitchM : state.floorHeightM;
+    const dY = Math.max(h/200, 1e-4);
+    const normalPositions = [];
+    for(let k=0; k<=loopCount; k++){
+      const y = Math.min(k * stepM, h);
+      const yLo = Math.max(0, y-dY), yHi = Math.min(h, y+dY);
+      const denom = (yHi - yLo) || dY;
+      for(let i=0;i<n;i++){
+        const [x,yOut,z] = layerPointFn(y, profile[i]);
+        const pLo = layerPointFn(yLo, profile[i]), pHi = layerPointFn(yHi, profile[i]);
+        const tHeight = [ (pHi[0]-pLo[0])/denom, (pHi[1]-pLo[1])/denom, (pHi[2]-pLo[2])/denom ];
+        // Central difference across neighboring profile points, same as the smooth cross-section
+        // path (v1.18.0) and buildHelicalGeometry (v1.17.1) — at a real polygon corner this gives an
+        // averaged direction rather than either adjacent panel's exact normal, a reasonable choice
+        // for a lightweight "which way is outward here" overlay rather than a literal render match.
+        const iPrev = closed ? (i-1+n)%n : Math.max(i-1, 0);
+        const iNext = closed ? (i+1)%n : Math.min(i+1, n-1);
+        const pPrev = layerPointFn(y, profile[iPrev]), pNext = layerPointFn(y, profile[iNext]);
+        const tGen = [ pNext[0]-pPrev[0], pNext[1]-pPrev[1], pNext[2]-pPrev[2] ];
+        // Cross order matches whichever winding convention is in play — buildHelicalGeometry uses
+        // the opposite order from buildDeformedGeometry's own faceted/smooth paths (see its comment
+        // on why), so this branches the same way rather than picking one and getting Helix backwards.
+        const nrm = state.mode === 'helix'
+          ? normalize3(cross3(tGen, tHeight))
+          : normalize3(cross3(tHeight, tGen));
+        normalPositions.push(x, yOut, z, x+nrm[0]*normalLen, yOut+nrm[1]*normalLen, z+nrm[2]*normalLen);
+      }
+    }
+    const normalGeo = new THREE.BufferGeometry();
+    normalGeo.setAttribute('position', new THREE.Float32BufferAttribute(normalPositions, 3));
+    overlayGroup.add(new THREE.LineSegments(normalGeo, normalMat));
   }
 
   // FFD control lattice + draggable handles — always shown in this mode since dragging them IS
