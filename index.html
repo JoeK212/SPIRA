@@ -4,6 +4,32 @@ Interactive explorer of architectural deformation operations — twisting, taper
 Joe.K · axisbim.io
 
 CHANGELOG
+v1.22.0 - 2026-07-18 - Added a "Panel flatness (warp)" overlay, following up on the panel-planarity
+         topic raised at the end of the last session (every SPIRA operation except pure extrusion
+         produces non-planar floor-to-floor panels in general — a real curtain-wall/cladding
+         concern, not just a rendering curiosity). For every real floor-to-floor, edge-to-edge
+         panel (not the fine render mesh — the actual four corners a fabricator would work from),
+         computes warp as the classic curtain-wall "twist" tolerance metric: the plane through three
+         of the panel's four corners, and the perpendicular distance of the fourth corner from that
+         plane. Rendered as a translucent color-coded quad per panel (green -> amber -> red over an
+         illustrative 0-50mm range, same "illustrative, not sourced" framing as the case-study
+         footprint estimates) nudged outward from the solid using the same centroid-based technique
+         as slice rings/floor lines. New HUD row reports max panel warp in mm (or inches in
+         Imperial) — a finer unit than the existing m/ft length readouts, since warp values are
+         small relative to the model. The warp computation itself always runs (cheap: floors x
+         edges, not floors x resolution), so the HUD number is live even with the visual overlay
+         off; only the colored quads are gated behind the toggle. Applies uniformly across all six
+         modes via the same layerPointFn/profile/closed pattern as floor lines and the normals
+         overlay, including Helix (panels between turn boundaries and generator segments). Verified
+         the warp math headlessly before shipping (straight prism and pure Shear both measure exactly
+         0, matching that translation is an isometry; axis-aligned rectangle panels under Taper also
+         measure exactly 0 even when V≠W, since an edge with one coordinate held constant has no
+         bilinear cross-term to warp with — non-axis-aligned edges, e.g. on Triangle, do warp under
+         asymmetric Taper as expected). Turned up a genuine finding along the way: Bend's panels
+         measure exactly flat (to floating-point precision) at every angle and cross-section tried,
+         unlike Twist — because Bend never rotates the local x/bend-axis direction, only sweeps the
+         cross-section along an arc, it's structurally a cylindrical bend of a flat sheet (developable
+         surface), not a twist. Added a note about this to Bend's Reference panel text.
 v1.21.0 - 2026-07-18 - Graphics consistency audit, per user request ("really big axis lines... this
          should be audited and reviewed"). Found and fixed three real issues: (1) Base plane B was a
          hardcoded size=4.2 regardless of the actual model — fine at classroom scale, but far smaller
@@ -749,6 +775,7 @@ v1.0.0 - 2026-07-17 - Initial build. Twist operation on four cross-section prese
       <div class="row"><span class="label" id="hudVolTwistLabel">deformed volume</span><span class="val mono" id="hudVolTwist">–</span></div>
       <div class="row"><span class="label" id="hudVolStraightLabel">prism volume</span><span class="val mono" id="hudVolStraight">–</span></div>
       <div class="row vol-match" id="hudMatch">volumes match — Cavalieri holds</div>
+      <div class="row"><span class="label">max panel warp</span><span class="val mono" id="hudPanelWarp">–</span></div>
     </div>
     <div id="viewControls">
       <button id="viewTopBtn" title="Look straight down, plan view">Top</button>
@@ -956,6 +983,10 @@ v1.0.0 - 2026-07-17 - Initial build. Twist operation on four cross-section prese
         <span>Surface normals (debug)</span>
         <div class="switch" data-toggle="normals"></div>
       </div>
+      <div class="toggle-row">
+        <span>Panel flatness (warp)</span>
+        <div class="switch" data-toggle="panelwarp"></div>
+      </div>
     </section>
 
     <section class="group">
@@ -1006,7 +1037,7 @@ v1.0.0 - 2026-07-17 - Initial build. Twist operation on four cross-section prese
 <script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
 <script src="https://cdn.jsdelivr.net/npm/three@0.128.0/examples/js/controls/OrbitControls.js"></script>
 <script>
-const APP_VERSION = '1.21.0';
+const APP_VERSION = '1.22.0';
 
 // ---------- toast ----------
 let toastTimer=null;
@@ -1075,8 +1106,17 @@ const HELP_HTML = `
   <h4>Overlays</h4>
   <p>Toggles in the sidebar control what's drawn alongside the solid: the axis A (and, for
   Shear/Bend, its moved image A₁), base plane B, ruling lines, slice-resolution rings, per-floor
-  lines, wireframe, and point labels. These are visualization aids only — none of them change the
-  exported geometry.</p>
+  lines, wireframe, point labels, surface normals, and panel flatness/warp. These are visualization
+  aids only — none of them change the exported geometry.</p>
+
+  <h4>Panel flatness (warp)</h4>
+  <p>Every operation except pure extrusion produces panels — the actual floor-to-floor,
+  edge-to-edge quads a fabricator would cut — that aren't perfectly flat. This overlay color-codes
+  each real panel from green (flat) through amber to red (warped), and the HUD reports the worst
+  panel's warp in mm/inches: the perpendicular distance of one corner from the plane of the other
+  three, the standard curtain-wall "twist" tolerance measure. The HUD number updates live even with
+  the colored overlay off. The color scale (0–50mm) is illustrative, not a sourced tolerance
+  spec — real limits vary by system and manufacturer.</p>
 
   <h4>View navigation</h4>
   <p>Drag to orbit, scroll to zoom, right-drag (or two-finger drag) to pan. <strong>Top</strong>,
@@ -1157,7 +1197,7 @@ const state = {
                         // from segments (render/export facet resolution above): a native Revit loft
                         // only needs enough profiles for its own curve fit to converge, not enough
                         // to look smooth as flat triangles
-  overlays: { axis:true, plane:true, rulings:true, slicerings:true, floorlines:true, wireframe:false, labels:false, normals:false }
+  overlays: { axis:true, plane:true, rulings:true, slicerings:true, floorlines:true, wireframe:false, labels:false, normals:false, panelwarp:false }
 };
 
 try{
@@ -1398,6 +1438,11 @@ function unitLabels(){ return state.units==='metric' ? {len:'m', area:'m²', vol
 function toDisplayLen(m){ return state.units==='metric' ? m : m*M_TO_FT; }
 function toDisplayArea(m2){ return state.units==='metric' ? m2 : m2*M_TO_FT*M_TO_FT; }
 function toDisplayVol(m3){ return state.units==='metric' ? m3 : m3*M_TO_FT*M_TO_FT*M_TO_FT; }
+// Panel warp values are small (mm-scale) relative to every other HUD length (m/ft), so they get
+// their own finer-grained unit rather than reading as "0.0m" — millimeters in Metric, inches in
+// Imperial, both natural units for a fabrication tolerance.
+function toDisplaySmallLen(m){ return state.units==='metric' ? m*1000 : m*M_TO_FT*12; }
+function smallLenUnit(){ return state.units==='metric' ? 'mm' : 'in'; }
 function totalHeightM(){
   return state.mode === 'helix' ? state.helixTurns * state.helixPitchM : state.floors * state.floorHeightM;
 }
@@ -1615,6 +1660,53 @@ function distSqArr(arr, ia, ib){
   const bx=arr[ib*3], by=arr[ib*3+1], bz=arr[ib*3+2];
   const dx=ax-bx, dy=ay-by, dz=az-bz;
   return dx*dx+dy*dy+dz*dz;
+}
+
+// Panel flatness / warp (v1.22.0). For every real floor-to-floor, edge-to-edge panel (four
+// corners: two adjacent profile points at two adjacent floor/turn boundaries — the actual quad a
+// fabricator or curtain-wall panel would be cut from, not the fine render mesh), measures warp
+// using the standard curtain-wall "twist" tolerance definition: fit a plane through three of the
+// panel's four corners, then take the perpendicular distance of the fourth corner from that plane.
+// This is a single, well-defined scalar per panel (not a least-squares fit across all four points),
+// matching how flatness tolerance is actually specified and measured in glazing/cladding practice.
+// Every operation here except pure extrusion warps panels in general — Taper included, via the
+// bilinear x*y cross term in its own scaling, not just the rotating/bending modes.
+function computePanelWarp(profile, layerPointFn, n, closed, loopCount, stepM){
+  const numEdges = closed ? n : n-1;
+  const panels = [];
+  let maxWarpM = 0, sumWarpM = 0;
+  for(let k=0; k<loopCount; k++){
+    const yLo = k*stepM, yHi = (k+1)*stepM;
+    for(let i=0; i<numEdges; i++){
+      const i2 = (i+1)%n;
+      const p00 = layerPointFn(yLo, profile[i]);
+      const p01 = layerPointFn(yLo, profile[i2]);
+      const p10 = layerPointFn(yHi, profile[i]);
+      const p11 = layerPointFn(yHi, profile[i2]);
+      const v1 = [p01[0]-p00[0], p01[1]-p00[1], p01[2]-p00[2]];
+      const v2 = [p10[0]-p00[0], p10[1]-p00[1], p10[2]-p00[2]];
+      const nrm = normalize3(cross3(v1, v2));
+      const toP11 = [p11[0]-p00[0], p11[1]-p00[1], p11[2]-p00[2]];
+      const warpM = toP11[0]*nrm[0] + toP11[1]*nrm[1] + toP11[2]*nrm[2]; // signed distance
+      const warpAbsM = Math.abs(warpM);
+      maxWarpM = Math.max(maxWarpM, warpAbsM);
+      sumWarpM += warpAbsM;
+      panels.push({ p00, p01, p10, p11, warpAbsM });
+    }
+  }
+  return { panels, maxWarpM, avgWarpM: panels.length ? sumWarpM/panels.length : 0 };
+}
+// Green -> amber -> red over an illustrative 0-50mm range (same "illustrative, not a sourced
+// tolerance spec" framing used for the case-study footprint estimates) — real curtain-wall twist
+// tolerances vary by system and manufacturer, this is a teaching-scale gradient, not a code value.
+function warpColor(warpAbsM){
+  const mm = warpAbsM * 1000;
+  const t = Math.max(0, Math.min(mm/50, 1));
+  const green = [0x2f,0x9e,0x44], amber = [0xf2,0xc1,0x4e], red = [0xc0,0x39,0x2b];
+  const [a,b] = t < 0.5 ? [green,amber] : [amber,red];
+  const localT = t < 0.5 ? t/0.5 : (t-0.5)/0.5;
+  const r = a[0]+(b[0]-a[0])*localT, g = a[1]+(b[1]-a[1])*localT, bch = a[2]+(b[2]-a[2])*localT;
+  return [r/255, g/255, bch/255];
 }
 
 function buildDeformedGeometry(profile, height, segs, mode, params, smoothCrossSection){
@@ -2276,6 +2368,45 @@ function rebuild(){
     overlayGroup.add(new THREE.LineSegments(normalGeo, normalMat));
   }
 
+  // Panel flatness / warp (v1.22.0) — stats are always computed (cheap: floors x edges, not
+  // floors x render resolution) so the HUD number stays live even with the visual overlay off;
+  // only the colored quad mesh itself is gated behind the toggle. Same loopCount/stepM pattern as
+  // floor lines and the normals overlay (turns/pitch in Helix, floors/floorHeightM elsewhere).
+  {
+    const loopCount = state.mode === 'helix' ? state.helixTurns : state.floors;
+    const stepM = state.mode === 'helix' ? state.helixPitchM : state.floorHeightM;
+    const { panels, maxWarpM } = computePanelWarp(profile, layerPointFn, n, closed, loopCount, stepM);
+    document.getElementById('hudPanelWarp').textContent =
+      toDisplaySmallLen(maxWarpM).toFixed(1) + ' ' + smallLenUnit();
+
+    if(state.overlays.panelwarp){
+      const positions = [], colors = [];
+      for(const panel of panels){
+        const { p00, p01, p10, p11, warpAbsM } = panel;
+        // Nudge every corner outward from the panel's own centroid, same technique slice rings
+        // (v1.14.2) and floor lines (v1.21.0 unification) use to avoid z-fighting with the
+        // coincident solid surface underneath.
+        const cx = (p00[0]+p01[0]+p10[0]+p11[0])/4;
+        const cy = (p00[1]+p01[1]+p10[1]+p11[1])/4;
+        const cz = (p00[2]+p01[2]+p10[2]+p11[2])/4;
+        const nudge = (p) => [ p[0]+(p[0]-cx)*0.03, p[1]+(p[1]-cy)*0.03, p[2]+(p[2]-cz)*0.03 ];
+        const q00 = nudge(p00), q01 = nudge(p01), q10 = nudge(p10), q11 = nudge(p11);
+        const col = warpColor(warpAbsM);
+        // Two triangles per panel (00,01,11) and (00,11,10) — winding doesn't matter here since
+        // the material is double-sided and unlit (color-coding, not shading, carries the meaning).
+        positions.push(...q00, ...q01, ...q11, ...q00, ...q11, ...q10);
+        for(let v=0; v<6; v++) colors.push(...col);
+      }
+      const warpGeo = new THREE.BufferGeometry();
+      warpGeo.setAttribute('position', new THREE.Float32BufferAttribute(positions, 3));
+      warpGeo.setAttribute('color', new THREE.Float32BufferAttribute(colors, 3));
+      const warpMat = new THREE.MeshBasicMaterial({
+        vertexColors: true, side: THREE.DoubleSide, transparent: true, opacity: 0.62, depthWrite: false
+      });
+      overlayGroup.add(new THREE.Mesh(warpGeo, warpMat));
+    }
+  }
+
   // FFD control lattice + draggable handles — always shown in this mode since dragging them IS
   // the interaction, not an optional decoration like the other overlays.
   ffdHandleMeshes = [];
@@ -2481,7 +2612,10 @@ const REFERENCE_TEXT = {
     and translates into the plane normal to that arc, with the profile's local x carried straight
     through, so it's really a 2D bend extended along x. Because each slice only rotates and
     translates, never scales, bending preserves volume too. Try β_max = 180° for a full U-shaped
-    bend, or push toward 360° to watch it curl back on itself.`,
+    bend, or push toward 360° to watch it curl back on itself. Turn on "Panel flatness (warp)" and
+    compare it against Twist: Bend's floor-to-floor panels come out exactly flat regardless of angle
+    or cross-section, since local x is never rotated — it's a true cylindrical bend of a flat sheet
+    (a developable surface), unlike Twist's helicoid, which warps every non-degenerate panel.`,
   ffd: `Free is the odd one out: unlike every other operation here, there's no axis and no fixed base
     plane at all — the whole solid sits inside a cuboid with 8 control points at its corners, and
     every point inside is a trilinear (1,1,1) Bézier blend of all 8. Drag any brick handle in the

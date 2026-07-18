@@ -121,6 +121,57 @@ a non-convex polygon).
 an angle `u` rather than rotating/scaling a fixed cross-section, and caps are only built for closed
 generators (the Circle preset; Line's open ribbon has no caps by design).
 
+## Panel flatness / warp
+
+`computePanelWarp(profile, layerPointFn, n, closed, loopCount, stepM)` measures how far each real
+floor-to-floor, edge-to-edge panel deviates from flat — the four corners a fabricator or
+curtain-wall panel would actually be cut from, sampled via `layerPointFn` at two adjacent
+floor/turn boundaries and two adjacent profile/generator points, not the fine render mesh.
+
+The metric is the standard curtain-wall "twist" tolerance definition, not a least-squares fit
+across all four points: fit a plane through three of the panel's corners (`p00`, `p01`, `p10` —
+`normal = normalize(cross(p01-p00, p10-p00))`), then take the signed perpendicular distance of the
+fourth corner (`p11`) from that plane. This is how flatness tolerance is actually specified and
+measured in glazing/cladding practice, and it's a single well-defined scalar per panel rather than
+requiring a fitting procedure.
+
+The function always runs on every `rebuild()` regardless of the overlay toggle — it's cheap
+(floors × edges, not floors × render resolution: a 100-floor, 8-edge model is 800 panels, not
+tens of thousands), so the HUD's "max panel warp" row stays live even with the visual overlay off.
+Only the colored quad mesh itself (`state.overlays.panelwarp`) is gated behind the toggle. Each
+panel is rendered as two triangles with matching per-vertex colors from `warpColor()` — a green
+(`0x2f9e44`) → amber (`0xf2c14e`) → red (`0xc0392b`) gradient over an illustrative 0–50mm range,
+the same "illustrative, not a sourced spec" framing used for the case-study footprint estimates —
+and nudged outward from each panel's own centroid by 3%, the same technique slice rings and floor
+lines use to avoid z-fighting with the coincident solid surface.
+
+Applies uniformly across all six modes via the same `layerPointFn`/`profile`/`closed`/`loopCount`/
+`stepM` pattern as floor lines and the normals overlay (`floors`/`floorHeightM` for the first five
+modes, `helixTurns`/`helixPitchM` for Helix) — for Helix specifically, "panels" span turn
+boundaries and generator segments rather than floors and cross-section edges, but the same function
+handles it without branching, since it only depends on `layerPointFn`'s returned points.
+
+**Verification.** Checked headlessly before shipping against several known cases: a straight prism
+and pure Shear both measure exactly zero warp (Shear is an affine map, which preserves planarity of
+any originally-flat panel — matches the book's own claim). A rectangular cross-section under Taper
+measures exactly zero warp on every panel even when `V ≠ W`, because each of its edges holds one
+local coordinate constant, leaving no bilinear cross-term for that edge to warp with; a Triangle
+preset under the same asymmetric Taper does warp on its non-axis-aligned edges, as expected. Twist
+warps heavily and grows with `α_max`, as expected for a helicoid.
+
+One finding surfaced during verification, not anticipated going in: **Bend's panels measure exactly
+flat (to floating-point precision) at every angle and cross-section tried** — a genuinely different
+result from Twist despite both being volume-preserving, rigid-per-slice operations. The reason is
+structural: Bend's `computeLayerPoint` passes the profile's local x-coordinate straight through
+unchanged (`worldX = p[0]`) and only ever rotates/translates the local radial coordinate `p[1]`
+within the plane normal to the bend arc — the local bend-axis direction itself is never rotated.
+That makes Bend, mechanically, a cylindrical bend of a flat sheet (a developable surface) rather
+than a twist, and developable surfaces are exactly the ones that can be unrolled flat without
+stretching — flat floor-to-floor panels are a direct consequence, not a coincidence. Twist, by
+contrast, rotates both local coordinates together, mixing them across height and producing a real
+helicoid, which is why its panels warp. This is now called out directly in Bend's Reference panel
+text as something to check with the overlay.
+
 ## Camera framing
 
 `frameCameraDefault()` fits an actual Three.js `Box3` computed from the rendered solid — the

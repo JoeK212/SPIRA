@@ -74,6 +74,18 @@ turns × pitch), with a Metric/Imperial toggle that converts every readout (leng
 the HUD. A "floor lines" overlay shows the actual story lines (or, in Helix, turn boundaries); a
 separate "slice rings" overlay shows the computational resolution the surface is built from.
 
+**Panel flatness (warp).** Every operation except pure extrusion produces floor-to-floor,
+edge-to-edge panels — the actual quads a fabricator would cut, not the fine render mesh — that
+aren't perfectly flat. This overlay color-codes each real panel green (flat) through amber to red
+(warped) and the HUD reports the worst panel's warp in mm (or inches), using the standard
+curtain-wall "twist" tolerance measure: the perpendicular distance of one corner from the plane of
+the other three. The color scale (0–50mm) is illustrative, the same way case-study footprint sizes
+are — not a sourced tolerance spec, since real limits vary by system and manufacturer. Comparing
+Twist against Bend with this overlay on is a good demonstration: Bend's panels come out exactly
+flat at any angle, since it only sweeps the cross-section along an arc without ever rotating the
+local bend-axis direction (a true cylindrical bend of a flat sheet), while Twist warps every
+non-degenerate panel.
+
 **Cross-section sizing.** Each preset (square, triangle, hexagon, octagon, ellipse, star) is
 generated at its own arbitrary proportions internally, then scaled — independently in width (x) and
 depth (z) — to real Width/Depth sliders in the Cross-section panel, so any preset can be sized in
