@@ -32,13 +32,15 @@ integration) rather than computed from a formula.
 
 **Helix** — a genuinely different construction from the other five: instead of extruding a
 cross-section and deforming each slice, a generator/meridian curve is swept by true helical motion:
-rotate by u about axis A while translating p·u along it (x=X(v)cosu, z=X(v)sinu, y=Y(v)+p·u). Two
+rotate by u about axis A while translating p·u along it (x=X(v)cosu, z=X(v)sinu, y=Y(v)+p·u). Three
 generator types: **Line** is the common/right helicoid — a straight segment orthogonal to A,
 producing the classic open spiral ramp or staircase surface, with adjustable inner radius (a
 central void) and outer radius. **Circle** places a circle flat in the meridian plane — a winding
-tube/screw-column, capped at both open ends. (A third variant — a circle held orthogonal to the
-helix's own tangent, the "true" constant-radius pipe — needs a moving Frenet frame along the 3D
-helix and isn't implemented; noted in the in-app reference text rather than silently skipped.) A
+tube/screw-column, capped at both open ends. **Pipe** rides the same circle along a Frenet frame
+(tangent/normal/binormal) computed from the helix centerline itself, so the circle stays exactly
+orthogonal to the local tangent at every point — the true constant-radius pipe, as opposed to
+Circle's simplified flat-in-the-meridian-plane version, whose apparent cross-section distorts as
+pitch steepens relative to radius. A
 helicoid isn't a solid — the common one has a hole around the axis and zero thickness — so there's
 no volume to preserve; the HUD instead reports surface area (also measured, same as Free, since no
 closed form exists here either) and generator length. Height is turns × pitch (rise per revolution)

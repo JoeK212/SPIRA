@@ -4,6 +4,26 @@ Interactive explorer of architectural deformation operations — twisting, taper
 Joe.K · axisbim.io
 
 CHANGELOG
+v1.15.0 - 2026-07-18 - Added "Pipe" as a third Helix generator, closing the gap flagged since
+         v1.7.0/EXTENDED.md's Known Limitations: a circle held orthogonal to the helix's own
+         tangent at every point (the "true" constant-radius pipe), as opposed to Circle's simplified
+         circle-flat-in-the-meridian-plane version. Implemented via an analytic Frenet frame
+         (tangent/normal/binormal) along the helix centerline (pipeFrenetPoint) — well-defined and
+         smooth everywhere for a circular helix (constant curvature/torsion, C'·C''=0 identically),
+         no numerical rotation-minimizing-frame approximation needed. buildHelicalGeometry() was
+         refactored to accept an optional evalPoint callback so Pipe reuses the same topology/
+         winding/cap code as Line/Circle rather than a parallel implementation; outward-normal
+         orientation and NaN-freedom verified headlessly (Node + three.js) before wiring in. While
+         building this, found and fixed two related correctness gaps that would have silently used
+         the wrong formula for Pipe specifically: the point-labels overlay and the loft-profiles
+         JSON exporter both called computeLayerPoint directly rather than whichever formula actually
+         built what's on screen. Introduced a single per-rebuild layerPointFn (stored on lastBuild
+         as evalPoint) that both now use instead, which also incidentally fixes a latent FFD case
+         (point labels at y=0 previously used the raw undeformed profile coordinate rather than the
+         actual — possibly user-dragged — bottom control-point position). Updated the Reference
+         panel, Help/HUD text, README.md, and EXTENDED.md's Known Limitations and Helix math section
+         to describe Pipe instead of flagging it as unbuilt; historical changelog entries describing
+         it as unimplemented (v1.7.0 onward) are left as accurate record of the time.
 v1.14.3 - 2026-07-18 - Fixed the actual source of the surface striping v1.14.2's ring nudge didn't
          fully address (user confirmed it was still visible with the Slice rings overlay off): flat
          shading itself produces a Mach-band effect on a curved surface built from many thin flat
@@ -687,9 +707,10 @@ v1.0.0 - 2026-07-17 - Initial build. Twist operation on four cross-section prese
         <div style="font-size:0.78rem; color:var(--muted); margin-bottom:8px;">
           Generator curve (swept helically about axis A)
         </div>
-        <div class="presets" id="helixGenGrid" style="grid-template-columns:1fr 1fr; margin-bottom:12px;">
+        <div class="presets" id="helixGenGrid" style="grid-template-columns:1fr 1fr 1fr; margin-bottom:12px;">
           <button class="preset-btn active" data-helixgen="line">Line (ramp)</button>
           <button class="preset-btn" data-helixgen="circle">Circle (tube)</button>
+          <button class="preset-btn" data-helixgen="pipe">Pipe (true)</button>
         </div>
         <div id="helixLineParams">
           <div class="slider-row">
@@ -821,7 +842,7 @@ v1.0.0 - 2026-07-17 - Initial build. Twist operation on four cross-section prese
 <script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
 <script src="https://cdn.jsdelivr.net/npm/three@0.128.0/examples/js/controls/OrbitControls.js"></script>
 <script>
-const APP_VERSION = '1.14.3';
+const APP_VERSION = '1.15.0';
 
 // ---------- toast ----------
 let toastTimer=null;
@@ -957,7 +978,7 @@ const state = {
   // Helix: a generator/meridian curve (radial X(v), height-offset Y(v)) swept by true helical motion.
   // Height here is turns × pitch, not floors × floor-height, so these live alongside but independent
   // of the floors/floorHeightM fields above (which twist/taper/shear/bend/ffd keep using).
-  helixGenerator: 'line', // 'line' (common helicoid / ramp) | 'circle' (tube swept in meridian plane)
+  helixGenerator: 'line', // 'line' (common helicoid / ramp) | 'circle' (tube, flat in meridian plane) | 'pipe' (true constant-radius pipe, Frenet frame)
   helixTurns: 3,
   helixPitchM: 3.0,        // rise per full revolution, always stored in meters
   helixRInnerM: 0.3,       // 'line' generator: inner radius (central void at the axis)
@@ -1075,9 +1096,10 @@ function trilinearBlend(u, v, w, cps){
 // radius (optionally >0, leaving a central void) to an outer radius -- the classic open spiral
 // ramp/stair surface. 'circle' is a circle lying entirely IN the meridian plane: this simplified
 // formula directly reproduces a winding tube/screw-column, with no Frenet-frame machinery needed
-// since the whole circle already sits flat in the plane the formula assumes. (A third variant -- a
-// circle held orthogonal to the helix's own tangent, the "true" constant-radius pipe -- needs a
-// moving Frenet frame along the 3D helix and isn't implemented here; see the in-app reference text.)
+// since the whole circle already sits flat in the plane the formula assumes. 'pipe' is the "true"
+// constant-radius pipe -- a circle held orthogonal to the helix's own tangent at every point, riding
+// a moving Frenet frame along the 3D helix centerline (see pipeFrenetPoint / buildHelicalGeometry's
+// evalPoint parameter) -- previously flagged as not implemented; see changelog v1.15.0.
 const HELIX_GENERATORS = {
   line: (p) => [ [p.rInner, 0], [p.rOuter, 0] ],
   circle: (p) => {
@@ -1087,9 +1109,49 @@ const HELIX_GENERATORS = {
       pts.push([ p.tubeOffset + p.tubeR*Math.cos(a), p.tubeR*Math.sin(a) ]);
     }
     return pts;
+  },
+  // Each "point" here is just a cross-section angle θ around the pipe — pipeFrenetPoint does the
+  // actual 3D placement via the Frenet frame, so the second array slot is unused (kept only so this
+  // fits the same 2-element-point shape every other generator returns).
+  pipe: (p) => {
+    const pts = [], n = 24;
+    for(let i=0;i<n;i++) pts.push([ i*2*Math.PI/n, 0 ]);
+    return pts;
   }
 };
-const HELIX_GENERATOR_CLOSED = { line:false, circle:true };
+const HELIX_GENERATOR_CLOSED = { line:false, circle:true, pipe:true };
+
+// True-pipe placement: a circle of radius params.tubeR held in the plane orthogonal to the helix
+// centerline's own tangent at parameter u, riding a Frenet frame (T,N,B) along that centerline —
+// as opposed to 'circle', which fixes the circle flat in the meridian plane regardless of the local
+// tangent direction. The centerline here is itself a circular helix of radius params.rOffset, so its
+// curvature and torsion are both constant and its Frenet frame is smooth and well-defined everywhere
+// (no inflection points to cause the frame to flip, unlike an arbitrary space curve) — verified
+// analytically below rather than needing a numerical rotation-minimizing-frame approximation.
+function pipeFrenetPoint(y, height, params, genPt){
+  const u = (y/height) * params.totalAngle;
+  const R0 = params.rOffset, p = params.riseParRad, r = params.tubeR;
+  const cosU = Math.cos(u), sinU = Math.sin(u);
+  const cx = R0*cosU, cy = p*u, cz = R0*sinU;
+  // Tangent T = C'(u) normalized. C'(u) = (-R0 sinu, p, R0 cosu).
+  const tx=-R0*sinU, ty=p, tz=R0*cosU;
+  const tLen = Math.hypot(tx,ty,tz) || 1;
+  const Tx=tx/tLen, Ty=ty/tLen, Tz=tz/tLen;
+  // Principal normal N = C''(u) normalized. C''(u) = (-R0 cosu, 0, -R0 sinu), which already has
+  // magnitude R0 and — for a circular helix specifically — is always exactly perpendicular to C'(u)
+  // (their dot product is R0²sinu·cosu - R0²sinu·cosu = 0 for every u), so no Gram-Schmidt
+  // re-orthogonalization against T is needed here the way a general space curve would require.
+  const Nx=-cosU, Ny=0, Nz=-sinU;
+  // Binormal completes the right-handed frame.
+  const Bx = Ty*Nz - Tz*Ny, By = Tz*Nx - Tx*Nz, Bz = Tx*Ny - Ty*Nx;
+  const theta = genPt[0];
+  const cosT = Math.cos(theta), sinT = Math.sin(theta);
+  return [
+    cx + r*(cosT*Nx + sinT*Bx),
+    cy + r*(cosT*Ny + sinT*By),
+    cz + r*(cosT*Nz + sinT*Bz)
+  ];
+}
 
 // Maps a base-plane profile point to its full 3D position at parameter y, for any of the five
 // operations. Twist rotates each slice by α(z) = (z/h)·α_max; taper scales each slice independently
@@ -1469,15 +1531,18 @@ function buildDeformedGeometry(profile, height, segs, mode, params){
 // changelog v1.7.0). Returns the same {layerPositions, segs, n} shape buildDeformedGeometry does,
 // so ruling lines, slice rings, and point labels all work unmodified on either builder's output —
 // only the caps differ: an open generator (line) has no cap (its "ends" are edges, not faces); a
-// closed generator (circle) gets fan-triangulated disk caps at both open ends of the tube.
-function buildHelicalGeometry(genPts, closed, uSegs, height, params){
+// closed generator (circle, pipe) gets fan-triangulated disk caps at both open ends of the tube.
+// evalPoint(y, genPt) defaults to the ordinary radial-sweep formula (line/circle); pipe passes its
+// own Frenet-frame placement (pipeFrenetPoint) instead, through the same topology/winding/cap code.
+function buildHelicalGeometry(genPts, closed, uSegs, height, params, evalPoint){
   const n = genPts.length;
+  const evalFn = evalPoint || ((y, p) => computeLayerPoint('helix', params, y, height, p));
   const positions = [];
   const indices = [];
   for(let j=0; j<=uSegs; j++){
     const y = (j/uSegs) * height;
     for(let i=0;i<n;i++){
-      const [x,yOut,z] = computeLayerPoint('helix', params, y, height, genPts[i]);
+      const [x,yOut,z] = evalFn(y, genPts[i]);
       positions.push(x, yOut, z);
     }
   }
@@ -1512,7 +1577,7 @@ function buildHelicalGeometry(genPts, closed, uSegs, height, params){
   if(closed){
     function buildDiskCap(y, flip){
       const capPos = [];
-      genPts.forEach(p=>{ const [x,yOut,z] = computeLayerPoint('helix', params, y, height, p); capPos.push(x,yOut,z); });
+      genPts.forEach(p=>{ const [x,yOut,z] = evalFn(y, p); capPos.push(x,yOut,z); });
       let cx=0, cy=0, cz=0;
       for(let i=0;i<n;i++){ cx+=capPos[i*3]; cy+=capPos[i*3+1]; cz+=capPos[i*3+2]; }
       cx/=n; cy/=n; cz/=n;
@@ -1579,6 +1644,12 @@ function rebuild(){
   let closed = true; // whether the cross-section/generator forms a closed ring (false only for
                       // Helix's open 'line' generator) — captured into lastBuild below
 
+  let layerPointFn; // resolves to whichever formula actually built what's on screen — the ordinary
+                     // per-mode computeLayerPoint for everything except Pipe, which needs its own
+                     // Frenet-frame formula instead. Point labels and the loft-profiles exporter both
+                     // use this (via lastBuild.evalPoint below) rather than calling computeLayerPoint
+                     // directly, so they can't silently fall back to the wrong formula for Pipe the
+                     // way they did before this was introduced.
   if(state.mode === 'helix'){
     // Helix sweeps a generator curve by true helical motion instead of extruding+deforming a
     // cross-section — a different builder entirely (see buildHelicalGeometry / changelog v1.7.0).
@@ -1594,7 +1665,21 @@ function rebuild(){
     profile = HELIX_GENERATORS[state.helixGenerator](genParams);
     closed = HELIX_GENERATOR_CLOSED[state.helixGenerator];
     const uSegs = Math.min(state.helixTurns * state.segments, 800); // sane cap on triangle count
-    const built = buildHelicalGeometry(profile, closed, uSegs, h, params);
+    // 'pipe' needs both the sweep params (totalAngle/riseParRad) and the tube's own geometry
+    // (rOffset/tubeR) together in one object for pipeFrenetPoint, and a custom evalPoint through
+    // buildHelicalGeometry instead of the ordinary radial-sweep computeLayerPoint formula.
+    let built;
+    if(state.helixGenerator === 'pipe'){
+      const pipeParams = {
+        totalAngle: params.totalAngle, riseParRad: params.riseParRad,
+        rOffset: state.helixTubeOffsetM, tubeR: state.helixTubeRM
+      };
+      layerPointFn = (y, p) => pipeFrenetPoint(y, h, pipeParams, p);
+      built = buildHelicalGeometry(profile, closed, uSegs, h, pipeParams, layerPointFn);
+    } else {
+      layerPointFn = (y, p) => computeLayerPoint('helix', params, y, h, p);
+      built = buildHelicalGeometry(profile, closed, uSegs, h, params);
+    }
     sideGeo = built.sideGeo; helixCapA = built.capA; helixCapB = built.capB;
     layerPositions = built.layerPositions; segs = built.segs; n = built.n;
     box = null;
@@ -1609,12 +1694,14 @@ function rebuild(){
       : state.mode === 'bend' ? { betaMax: state.bendBetaMax }
       : state.mode === 'ffd' ? { box, cps: ffdControlPoints(box, h, state.ffdOffsets) }
       : { alphaMax: state.alphaMax };
+    const modeForPoint = state.mode, paramsForPoint = params;
+    layerPointFn = (y, p) => computeLayerPoint(modeForPoint, paramsForPoint, y, h, p);
     ({ sideGeo, bottomCap, topCap, layerPositions, segs, n } = buildDeformedGeometry(
       profile, h, state.segments, state.mode, params
     ));
   }
 
-  lastBuild = { mode: state.mode, profile, params, h, closed, n };
+  lastBuild = { mode: state.mode, profile, params, h, closed, n, evalPoint: layerPointFn };
 
   // v1.14.2 replaced flat shading (each triangle its own face normal) with analytic per-vertex
   // normals for twist/taper/shear/bend/ffd — computed directly from the deformation's own tangent
@@ -1803,9 +1890,11 @@ function rebuild(){
     overlayGroup.add(edges);
   }
 
-  // point labels a,b,c (bottom) -> a1,b1,c1 (top), first up-to-3 profile verts. For helix, "bp" is
-  // a generator point [X(v), Y(v)] (radial, height-offset) rather than an [x,z] footprint point, so
-  // its bottom anchor sits at u=0 (x=X(v), z≈0) instead of the other modes' fixed-height-plan layout.
+  // point labels a,b,c (bottom) -> a1,b1,c1 (top), first up-to-3 profile verts. Positions now come
+  // from layerPointFn (the same evaluator that actually built what's on screen — see its definition
+  // above) rather than hand-approximating from the raw generator coordinates, since that
+  // approximation only held for the ordinary radial-sweep helix formula (line/circle) and would have
+  // placed Pipe's labels using its unrelated (angle, unused) generator coordinates.
   if(state.overlays.labels){
     // Fixed 0.9x0.45 (world units) read too small once the solid itself is building-scale (tens of
     // meters/feet tall) — sizeMult scales the sprite with the model, same Math.max(proportional,
@@ -1815,12 +1904,20 @@ function rebuild(){
     const names = ['a','b','c','d','e','f','g','h','i','j'];
     for(let i=0;i<Math.min(n, names.length); i++){
       const bp = profile[i];
+      const [bx,byOut,bz] = layerPointFn(0, bp);
       const bLabel = spriteLabel(names[i], '#1a1a18', labelSizeMult);
-      if(state.mode === 'helix') bLabel.position.set(bp[0]*1.06, bp[1]+0.25, 0.12);
-      else bLabel.position.set(bp[0]*1.12, 0.25, bp[1]*1.12);
+      if(state.mode === 'helix'){
+        // Multiplicative outward nudge breaks down right on the axis (0 * anything is still 0) —
+        // e.g. Line's inner point at rInner=0, or any generator point that lands at x=z=0 at u=0 —
+        // so those get a small additive fallback instead, same idea the old u=0-specific code used.
+        const nudge = (v) => Math.abs(v) < 0.01 ? 0.12 : v*1.06;
+        bLabel.position.set(nudge(bx), byOut+0.25, nudge(bz));
+      } else {
+        bLabel.position.set(bx*1.12, byOut+0.25, bz*1.12);
+      }
       overlayGroup.add(bLabel);
 
-      const [tx,tyOut,tz] = computeLayerPoint(state.mode, params, h, h, profile[i]);
+      const [tx,tyOut,tz] = layerPointFn(h, bp);
       const tLabel = spriteLabel(names[i]+'₁', '#b23a2e', labelSizeMult);
       tLabel.position.set(tx*1.12, tyOut+0.25, tz*1.12);
       overlayGroup.add(tLabel);
@@ -1873,7 +1970,7 @@ function rebuild(){
 
     const genLen = state.helixGenerator === 'line'
       ? (helixROuterC - state.helixRInnerM)
-      : (2*Math.PI*state.helixTubeRM);
+      : (2*Math.PI*state.helixTubeRM); // same circumference formula for 'circle' and 'pipe'
     document.getElementById('hudAreaLabel').textContent = 'generator length';
     document.getElementById('hudArea').textContent = toDisplayLen(genLen).toFixed(2) + ' ' + u.len;
 
@@ -1881,12 +1978,16 @@ function rebuild(){
     document.getElementById('hudVolTwistLabel').textContent = 'surface area';
     document.getElementById('hudVolTwist').textContent = toDisplayArea(surfaceArea).toFixed(2) + ' ' + u.area;
     document.getElementById('hudVolStraightLabel').textContent = 'generator';
-    document.getElementById('hudVolStraight').textContent = state.helixGenerator === 'line' ? 'line (ramp)' : 'circle (tube)';
+    document.getElementById('hudVolStraight').textContent =
+      state.helixGenerator === 'line' ? 'line (ramp)'
+      : state.helixGenerator === 'circle' ? 'circle (tube)'
+      : 'circle ⊥ tangent (pipe)';
 
     const matchEl = document.getElementById('hudMatch');
-    matchEl.textContent = state.helixGenerator === 'line'
-      ? 'common helicoid — open ruled surface (no volume to preserve)'
-      : 'circle swept in the meridian plane — winding tube';
+    matchEl.textContent =
+      state.helixGenerator === 'line' ? 'common helicoid — open ruled surface (no volume to preserve)'
+      : state.helixGenerator === 'circle' ? 'circle swept in the meridian plane — winding tube'
+      : 'circle held orthogonal to the tangent (Frenet frame) — true constant-radius pipe';
   } else {
     document.getElementById('hudAreaLabel').textContent = 'base area';
     document.getElementById('hudVolTwistLabel').textContent = 'deformed volume';
@@ -1953,8 +2054,9 @@ function rebuild(){
     : state.mode === 'helix'
     ? `Helix ${state.helixGenerator} ${state.helixTurns}× p${toDisplayLen(state.helixPitchM).toFixed(1)}${u.len}`
     : `Twist α_max ${state.alphaMax}°`;
+  const helixGenFooterLabel = { line:'Line generator', circle:'Circle generator', pipe:'Pipe generator' }[state.helixGenerator];
   document.getElementById('footRight').textContent = state.mode === 'helix'
-    ? `${state.helixGenerator === 'line' ? 'Line generator' : 'Circle generator'} · ${paramSummary} · ${state.helixTurns} turns · h ${toDisplayLen(h).toFixed(1)}${u.len} · ${segs} segments`
+    ? `${helixGenFooterLabel} · ${paramSummary} · ${state.helixTurns} turns · h ${toDisplayLen(h).toFixed(1)}${u.len} · ${segs} segments`
     : `${PRESET_LABELS[state.preset]} · ${paramSummary} · ${state.floors} floors · h ${toDisplayLen(h).toFixed(1)}${u.len} · ${state.segments} slices`;
 
   if(!hasFramedOnce){ frameCameraDefault(); hasFramedOnce = true; }
@@ -2039,11 +2141,11 @@ const REFERENCE_TEXT = {
     along it (x=X(v)cosu, z=X(v)sinu, y=Y(v)+p·u). "Line" sweeps a straight segment orthogonal to A —
     the common/right helicoid, the classic open spiral ramp or staircase — try a small inner radius
     for a central newel void. "Circle" sweeps a circle lying flat in the meridian plane, producing a
-    winding tube or screw column. A third variant — a circle held orthogonal to the helix's own
-    tangent, giving a true constant-radius pipe — would need a moving Frenet frame along the 3D helix
-    and isn't modeled here. Because a helicoid isn't a solid (the line generator in particular leaves
-    a hole around the axis with zero thickness), there's no volume to report — the HUD shows surface
-    area instead.`
+    winding tube or screw column. "Pipe" is the true constant-radius pipe — the circle instead rides
+    a Frenet frame along the helix centerline, always held orthogonal to the local tangent, so unlike
+    "Circle" its cross-section never distorts as the pitch steepens. Because a helicoid isn't a solid
+    (the line generator in particular leaves a hole around the axis with zero thickness), there's no
+    volume to report — the HUD shows surface area instead.`
 };
 const FORMULA_HTML = {
   twist: 'α(z) = (z/h)·α<sub>max</sub>',
@@ -2084,7 +2186,7 @@ function applyModeChrome(){
   document.getElementById('floorLinesLabel').textContent = state.mode === 'helix' ? 'Turn lines (per revolution)' : 'Floor lines (per floor)';
   if(state.mode === 'helix'){
     document.getElementById('helixLineParams').style.display = state.helixGenerator === 'line' ? '' : 'none';
-    document.getElementById('helixCircleParams').style.display = state.helixGenerator === 'circle' ? '' : 'none';
+    document.getElementById('helixCircleParams').style.display = state.helixGenerator === 'line' ? 'none' : '';
     [...document.getElementById('helixGenGrid').children].forEach(b=>b.classList.toggle('active', b.dataset.helixgen === state.helixGenerator));
   }
   [...modeGrid.children].forEach(b=>b.classList.toggle('active', b.dataset.mode === state.mode));
@@ -2105,7 +2207,8 @@ const helixGenGrid = document.getElementById('helixGenGrid');
     state.helixGenerator = btn.dataset.helixgen;
     applyModeChrome();
     persist(); rebuild();
-    toast((state.helixGenerator === 'line' ? 'Line' : 'Circle') + ' generator');
+    const genLabel = { line:'Line', circle:'Circle', pipe:'Pipe' }[state.helixGenerator];
+    toast(genLabel + ' generator');
   });
 });
 
@@ -2373,7 +2476,7 @@ function round6(v){ return Math.round(v*1e6)/1e6; }
 
 function buildLoftProfilesJSON(){
   if(!lastBuild) return null;
-  const { mode, profile, params, h, closed, n } = lastBuild;
+  const { mode, profile, h, closed, n, evalPoint } = lastBuild;
   const N = Math.max(2, state.loftProfileCount);
   const MM = 1000;
   const levels = [];
@@ -2381,7 +2484,7 @@ function buildLoftProfilesJSON(){
     const t = N === 1 ? 0 : k/(N-1);
     const y = t*h;
     const points = profile.map(p=>{
-      const [x, yOut, z] = computeLayerPoint(mode, params, y, h, p);
+      const [x, yOut, z] = evalPoint(y, p);
       // Y-up (Three.js/SPIRA) -> Z-up (Revit/AutoCAD/ACIS convention): (x,y,z) -> (x,-z,y), a pure
       // rotation, so downstream consumers of this JSON don't need to re-derive or re-check it.
       return [ round6(x*MM), round6(-z*MM), round6(yOut*MM) ];

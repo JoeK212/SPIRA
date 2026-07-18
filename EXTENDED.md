@@ -73,11 +73,31 @@ integration (divergence theorem) rather than a derived formula.
 **Helix.** Structurally different from the other five — it sweeps a generator curve by helical
 motion rather than deforming a solid cross-section: `x = X(v)·cos(u)`, `z = X(v)·sin(u)`,
 `y = Y(v) + p·u`, where `(X(v), Y(v))` is the generator's own 2D shape and `p` is rise-per-radian
-(pitch / 2π). Two generator presets: **Line** (a straight segment orthogonal to the axis — the
-common/right helicoid, the classic open spiral ramp/stair surface) and **Circle** (a circle lying
-flat in the meridian plane, producing a winding tube). A helicoid has no enclosed volume in general
-(the Line generator in particular leaves a hole around the axis with zero wall thickness), so the
-HUD reports surface area instead, again via numeric mesh integration rather than a formula.
+(pitch / 2π). Three generator presets: **Line** (a straight segment orthogonal to the axis — the
+common/right helicoid, the classic open spiral ramp/stair surface), **Circle** (a circle lying
+flat in the meridian plane, producing a winding tube), and **Pipe** (the true constant-radius pipe).
+Pipe doesn't fit the `X(v)cos(u), X(v)sin(u)` formula above at all — it needs its own construction
+(`pipeFrenetPoint`), since the circle has to stay orthogonal to the *local tangent* of the helix
+centerline rather than sitting flat in a fixed plane. The centerline is itself a circular helix
+`C(u) = (R₀cos(u), p·u, R₀sin(u))`; its Frenet frame is analytic and well-behaved everywhere (no
+rotation-minimizing-frame machinery needed) because a circular helix has constant curvature and
+torsion:
+- Tangent `T = C′(u) / |C′(u)|`, where `C′(u) = (−R₀sin(u), p, R₀cos(u))`.
+- Normal `N = C″(u) / |C″(u)|`, where `C″(u) = (−R₀cos(u), 0, −R₀sin(u))` — already unit length
+  (its magnitude is exactly `R₀`, dividing by which leaves a unit vector), and `C′(u)·C″(u) = 0`
+  for every `u`, so `N` needs no re-orthogonalization against `T` the way an arbitrary space curve's
+  normal would.
+- Binormal `B = T × N`, completing a right-handed frame.
+
+A generator point at cross-section angle `θ` and radius `r` places as
+`C(u) + r·(cos(θ)·N + sin(θ)·B)`. `buildHelicalGeometry()` was refactored to accept an optional
+`evalPoint(y, genPt)` callback specifically so Pipe could reuse the same topology/winding/cap code
+as Line and Circle rather than duplicating it — Line and Circle still use the default callback (the
+ordinary `X(v)cos(u)` formula via `computeLayerPoint`), Pipe supplies `pipeFrenetPoint` instead.
+Outward-normal orientation and NaN-freedom were checked headlessly (Node + three.js) across a plain
+untwisted case and a multi-turn twisted case before shipping. A helicoid has no enclosed volume in
+general (the Line generator in particular leaves a hole around the axis with zero wall thickness),
+so the HUD reports surface area instead, again via numeric mesh integration rather than a formula.
 
 ## Geometry construction
 
@@ -196,11 +216,9 @@ before being handed over, and then confirmed working end-to-end in an actual Rev
 
 ## Known limitations
 
-- Helix's third book variant (a circle held orthogonal to the helix's own tangent — a true
-  constant-radius pipe, as opposed to the Circle preset's simplified "circle in the meridian plane")
-  needs a moving Frenet frame along the 3D helix and isn't implemented.
 - Helix's open Line generator can't be exported through the current loft pipeline (no solid
-  interior); would need a ruled-surface approach instead.
+  interior); would need a ruled-surface approach instead. Pipe and Circle are both closed generators
+  and export the same way every other closed mode does.
 - Free/FFD's caps aren't guaranteed to stay flat under an arbitrary control-point drag (an offset
   corner control point can bend even the "flat" top/bottom), so any code path that assumes flat caps
   for other modes explicitly excludes FFD.
