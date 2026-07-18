@@ -4,6 +4,18 @@ Interactive explorer of architectural deformation operations — twisting, taper
 Joe.K · axisbim.io
 
 CHANGELOG
+v1.10.2 - 2026-07-18 - Fixed .sat still not importing (Revit 2026 and AutoCAD Architecture 2026,
+         both silently, no error either time — reported after v1.10.1). Root cause: the header
+         declared ACIS version 700 while every token actually written follows pre-700 convention
+         (plain length-prefixed header strings rather than @-delimited ones; numeric 0/1 coedge
+         sense rather than "forward"/"reversed" strings) — version 700 is specifically where ACIS
+         switches both of those conventions. A version-aware reader picks its parsing grammar from
+         that header number before reading anything else, so declaring 700 while writing the older
+         grammar makes the whole file unrecognized, with no partial import and no error — matching
+         what was reported. Now declares 400, the one version every record layout has actually been
+         checked token-for-token against a real, fully-quoted worked example for, instead of 700,
+         which nothing here was ever verified against. Re-verified structurally; still not tested
+         against a live ACIS kernel, Revit, or AutoCAD directly from this environment.
 v1.10.1 - 2026-07-18 - Fixed the v1.10.0 .sat export failing to import in Revit 2016. Two record
          fields had been left as null ($-1) where two independently-sourced, directly-quoted real
          ACIS SAT examples both show an actual populated pointer: EDGE's back-reference to one of
@@ -627,7 +639,7 @@ v1.0.0 - 2026-07-17 - Initial build. Twist operation on four cross-section prese
 <script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
 <script src="https://cdn.jsdelivr.net/npm/three@0.128.0/examples/js/controls/OrbitControls.js"></script>
 <script>
-const APP_VERSION = '1.10.1';
+const APP_VERSION = '1.10.2';
 
 // ---------- toast ----------
 let toastTimer=null;
@@ -1984,9 +1996,12 @@ document.querySelectorAll('.reset-btn').forEach(btn=>{
 });
 
 // ---------- .sat export (ACIS SAT, faceted B-rep — flat triangular planar faces) ----------
-// Targets ACIS SAT version 700, the version documented (by the ezdxf project, cross-checked
-// against real ACIS 4.0-era Spatial docs for header/BODY/LUMP/SHELL/FACE/LOOP fields) as broadly
-// readable by AutoCAD-, BricsCAD-, and Rhino-class ACIS consumers. Every triangle already on
+// Targets ACIS SAT version 400, the one version every record layout below has been checked
+// against a real, fully-quoted worked example for (Spatial's own ACIS 4.0 doc example, plus an
+// independently-sourced ACIS 1.x-era cube file for cross-checking the fields that example didn't
+// spell out). An earlier revision declared 700 while writing pre-700 token conventions (plain
+// header strings, numeric coedge sense) — an internally inconsistent file, and the likely reason
+// both Revit and AutoCAD silently rejected it outright (v1.10.2 fix).
 // screen becomes one exact planar ACIS face — buildDeformedGeometry/buildHelicalGeometry always
 // emit triangles (never non-planar quads), so no curve-fitting or approximation is introduced
 // beyond what's already rendered. Twist/Taper/Shear/Bend/Free are closed meshes and export as a
@@ -2151,10 +2166,18 @@ function buildSatText(){
 
   const now = new Date();
   const productStr = 'SPIRA (Axis BIM)';
-  const versionStr = 'ACIS 7.0 NT';
+  // Declaring 700 here previously while writing pre-700 token conventions (plain length-prefixed
+  // header strings instead of @-delimited ones, numeric coedge sense instead of "forward"/
+  // "reversed" strings) is an internally inconsistent file: a version-aware reader picks its
+  // parsing grammar from this number before it reads anything else, so a mismatch here can make
+  // the entire file unrecognized with no partial import and no error — which matches what happened
+  // in both Revit and AutoCAD. 400 is the one version every token below has been checked against a
+  // real, fully-quoted worked example for, so declare that instead of a version nothing here was
+  // actually verified against.
+  const versionStr = 'ACIS 4.0 NT';
   const dateStr = satCtimeLike(now);
   const header =
-    `700 0 1 0\n` +
+    `400 0 1 0\n` +
     `${productStr.length} ${productStr} ${versionStr.length} ${versionStr} ${dateStr.length} ${dateStr}\n` +
     `1 9.9999999999999995e-007 1e-010`;
 
