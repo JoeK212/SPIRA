@@ -1,9 +1,18 @@
 <!--
 SPIRA
-Interactive explorer of the architectural twist deformation — axis, base plane, and a live α(z) = (z/h)·α_max solid
+Interactive explorer of architectural deformation operations — twisting and tapering — with a live solid and volume readout
 Joe.K · axisbim.io
 
 CHANGELOG
+v1.3.0 - 2026-07-17 - Added Tapering as a second operation (Fig. 13.7-13.9), selectable via a new
+         Operation switcher at the top of the sidebar. Refactored the twist-only geometry builder
+         into a generic buildDeformedGeometry() driven by a per-mode layer-point transform
+         (computeLayerPoint), so both operations share the ruled-surface construction, adaptive
+         diagonal triangulation, cross-section presets, floors/units, and all overlays. Taper scales
+         each slice independently in x (v(z)) and y (w(z)), linear from 1 at the base to user-set v,
+         w at the top; unlike twisting this does not preserve volume, so the HUD's volume-match
+         message now reports the actual percentage instead of always claiming equality. Volume
+         formula is closed-form (verified against numerical integration, not just asserted).
 v1.2.0 - 2026-07-17 - Real-world height + units, and a fix for the faint diagonal shading on the
          twisted surface. Root cause of the shading: a twisted quad isn't planar, so splitting it
          into two triangles always leaves a real (if subtle) crease along whichever diagonal is
@@ -37,9 +46,9 @@ v1.0.0 - 2026-07-17 - Initial build. Twist operation on four cross-section prese
 <meta name="apple-mobile-web-app-capable" content="yes">
 <meta name="mobile-web-app-capable" content="yes">
 <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
-<meta name="description" content="Interactive explorer of the architectural twist deformation — axis, base plane, and a live twisted solid.">
+<meta name="description" content="Interactive explorer of architectural deformation operations — twisting and tapering — with a live solid and volume readout.">
 <meta name="theme-color" content="#f4f1ea" id="themeColorMeta">
-<title>SPIRA — Twist Geometry Explorer</title>
+<title>SPIRA — Deformation Geometry Explorer</title>
 <style>
   :root{
     --cream:#f4f1ea;
@@ -211,26 +220,34 @@ v1.0.0 - 2026-07-17 - Initial build. Twist operation on four cross-section prese
 
 <header>
   <h1>SPIRA</h1>
-  <div class="tag">twist deformation, live</div>
-  <div class="axis-badge">α(z) = (z/h)·α<sub>max</sub></div>
+  <div class="tag" id="modeTagline">twist deformation, live</div>
+  <div class="axis-badge mono" id="formulaBadge">α(z) = (z/h)·α<sub>max</sub></div>
 </header>
 
 <main>
   <div id="viewport">
     <div id="canvasHost"></div>
     <div id="hud">
-      <div class="formula mono">α(z) = (z / h) · α<sub>max</sub></div>
-      <div class="row"><span class="label">α_max</span><span class="val mono" id="hudAlpha">0°</span></div>
-      <div class="row"><span class="label">α at h/2</span><span class="val mono" id="hudHalf">0°</span></div>
+      <div class="formula mono" id="hudFormula">α(z) = (z / h) · α<sub>max</sub></div>
+      <div class="row"><span class="label" id="hudParam1Label">α_max</span><span class="val mono" id="hudParam1">0°</span></div>
+      <div class="row"><span class="label" id="hudParam2Label">α at h/2</span><span class="val mono" id="hudParam2">0°</span></div>
       <div class="row"><span class="label">height (h)</span><span class="val mono" id="hudHeight">–</span></div>
       <div class="row"><span class="label">base area</span><span class="val mono" id="hudArea">–</span></div>
-      <div class="row"><span class="label">twisted volume</span><span class="val mono" id="hudVolTwist">–</span></div>
-      <div class="row"><span class="label">untwisted volume</span><span class="val mono" id="hudVolStraight">–</span></div>
+      <div class="row"><span class="label">deformed volume</span><span class="val mono" id="hudVolTwist">–</span></div>
+      <div class="row"><span class="label">prism volume</span><span class="val mono" id="hudVolStraight">–</span></div>
       <div class="row vol-match" id="hudMatch">volumes match — Cavalieri holds</div>
     </div>
   </div>
 
   <aside>
+    <section class="group">
+      <h3>Operation</h3>
+      <div class="presets" id="modeGrid">
+        <button class="preset-btn active" data-mode="twist">Twist</button>
+        <button class="preset-btn" data-mode="taper">Taper</button>
+      </div>
+    </section>
+
     <section class="group">
       <h3>Cross-section (profile in plane B)</h3>
       <div class="presets" id="presetGrid"></div>
@@ -245,10 +262,22 @@ v1.0.0 - 2026-07-17 - Initial build. Twist operation on four cross-section prese
     </section>
 
     <section class="group">
-      <h3>Twist parameters</h3>
-      <div class="slider-row">
-        <div class="top"><span>α_max (twist of top plane T)</span><span class="val" id="alphaVal">120°</span></div>
-        <input type="range" id="alphaSlider" min="-720" max="720" step="1" value="120">
+      <h3>Deformation parameters</h3>
+      <div id="twistParamsBlock">
+        <div class="slider-row">
+          <div class="top"><span>α_max (twist of top plane T)</span><span class="val" id="alphaVal">120°</span></div>
+          <input type="range" id="alphaSlider" min="-720" max="720" step="1" value="120">
+        </div>
+      </div>
+      <div id="taperParamsBlock" style="display:none;">
+        <div class="slider-row">
+          <div class="top"><span>v (x-direction scale at top)</span><span class="val" id="taperVVal">0.50</span></div>
+          <input type="range" id="taperVSlider" min="0.1" max="3" step="0.05" value="0.5">
+        </div>
+        <div class="slider-row">
+          <div class="top"><span>w (y-direction scale at top)</span><span class="val" id="taperWVal">0.50</span></div>
+          <input type="range" id="taperWSlider" min="0.1" max="3" step="0.05" value="0.5">
+        </div>
       </div>
       <div class="slider-row">
         <div class="top"><span>floors</span><span class="val" id="floorsVal">8</span></div>
@@ -268,7 +297,7 @@ v1.0.0 - 2026-07-17 - Initial build. Twist operation on four cross-section prese
     <section class="group">
       <h3>Overlays</h3>
       <div class="toggle-row">
-        <span>Twist axis A</span>
+        <span>Axis A</span>
         <div class="switch on" data-toggle="axis"></div>
       </div>
       <div class="toggle-row">
@@ -276,7 +305,7 @@ v1.0.0 - 2026-07-17 - Initial build. Twist operation on four cross-section prese
         <div class="switch on" data-toggle="plane"></div>
       </div>
       <div class="toggle-row">
-        <span>Ruling lines (l₁ helices)</span>
+        <span>Ruling lines (edge curves)</span>
         <div class="switch on" data-toggle="rulings"></div>
       </div>
       <div class="toggle-row">
@@ -299,7 +328,7 @@ v1.0.0 - 2026-07-17 - Initial build. Twist operation on four cross-section prese
 
     <section class="group">
       <h3>Reference</h3>
-      <div style="font-size:0.76rem; line-height:1.6; color:var(--muted);">
+      <div style="font-size:0.76rem; line-height:1.6; color:var(--muted);" id="referenceText">
         This is Fig. 13.3–13.6's twist operation: a fixed base plane B, a vertical axis A, and every
         horizontal slice at height z rotated by α(z). Straight vertical edges become helices; a flat
         wall through A becomes a helicoid. Try α_max = 90° and 180° to reproduce the two right-hand
@@ -319,7 +348,7 @@ v1.0.0 - 2026-07-17 - Initial build. Twist operation on four cross-section prese
 <script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
 <script src="https://cdn.jsdelivr.net/npm/three@0.128.0/examples/js/controls/OrbitControls.js"></script>
 <script>
-const APP_VERSION = '1.2.0';
+const APP_VERSION = '1.3.0';
 
 // ---------- toast ----------
 let toastTimer=null;
@@ -362,8 +391,11 @@ document.getElementById('footVersion').innerHTML =
 
 // ---------- state ----------
 const state = {
+  mode: 'twist',          // 'twist' | 'taper'
   preset: 'square',
   alphaMax: 120,
+  taperV: 0.5,             // x-direction scale factor at top plane T (book notation v)
+  taperW: 0.5,             // y-direction scale factor at top plane T (book notation w)
   units: 'metric',       // 'metric' | 'imperial' — display only; geometry is always stored in meters
   floors: 8,
   floorHeightM: 3.5,     // floor-to-floor height, always stored in meters regardless of display units
@@ -420,6 +452,19 @@ function rotate2D(p, rad){
   return [ p[0]*c - p[1]*s, p[0]*s + p[1]*c ];
 }
 
+// Maps a base-plane profile point to its position at height y, for either operation.
+// Twist rotates each slice by α(z) = (z/h)·α_max; taper scales each slice independently in x
+// (factor v(z)) and y (factor w(z)), both linear between 1 at the base and v/w at the top.
+function computeLayerPoint(mode, params, y, h, p){
+  if(mode === 'taper'){
+    const vFac = 1 + (y/h) * (params.V - 1);
+    const wFac = 1 + (y/h) * (params.W - 1);
+    return [ p[0]*vFac, p[1]*wFac ];
+  }
+  const angleDeg = (y/h) * params.alphaMax;
+  return rotate2D(p, angleDeg * Math.PI/180);
+}
+
 // ---------- units ----------
 const M_TO_FT = 3.280839895;
 function unitLabels(){ return state.units==='metric' ? {len:'m', area:'m²', vol:'m³'} : {len:'ft', area:'ft²', vol:'ft³'}; }
@@ -427,6 +472,17 @@ function toDisplayLen(m){ return state.units==='metric' ? m : m*M_TO_FT; }
 function toDisplayArea(m2){ return state.units==='metric' ? m2 : m2*M_TO_FT*M_TO_FT; }
 function toDisplayVol(m3){ return state.units==='metric' ? m3 : m3*M_TO_FT*M_TO_FT*M_TO_FT; }
 function totalHeightM(){ return state.floors * state.floorHeightM; }
+
+// Twist never changes a slice's area (Cavalieri), so deformed volume == prism volume exactly.
+// Taper scales each slice's area by v(z)*w(z), a quadratic in z, so the volume ratio has a closed
+// form: baseArea * h * [1 + (V+W-2)/2 + (V-1)(W-1)/3] (integral of v(z)w(z) dz worked out by hand).
+function computeDeformedVolume(mode, params, baseArea, h){
+  if(mode === 'taper'){
+    const V = params.V, W = params.W;
+    return baseArea * h * (1 + (V + W - 2)/2 + (V - 1)*(W - 1)/3);
+  }
+  return baseArea * h;
+}
 
 // ---------- three.js setup ----------
 const host = document.getElementById('canvasHost');
@@ -466,7 +522,7 @@ function resize(){
 window.addEventListener('resize', resize);
 
 // ---------- geometry builders ----------
-function buildTwistGeometry(profile, height, alphaMaxDeg, segs){
+function buildDeformedGeometry(profile, height, segs, mode, params){
   const n = profile.length;
   const positions = [];
   const indices = [];
@@ -474,10 +530,8 @@ function buildTwistGeometry(profile, height, alphaMaxDeg, segs){
   // side surface: (segs+1) layers x n profile points
   for(let j=0; j<=segs; j++){
     const y = (j/segs) * height;
-    const angleDeg = (y/height) * alphaMaxDeg;
-    const rad = angleDeg * Math.PI/180;
     for(let i=0;i<n;i++){
-      const [x,z] = rotate2D(profile[i], rad);
+      const [x,z] = computeLayerPoint(mode, params, y, height, profile[i]);
       positions.push(x, y, z);
     }
   }
@@ -493,9 +547,9 @@ function buildTwistGeometry(profile, height, alphaMaxDeg, segs){
       const b = j*n + (i+1)%n;
       const c = (j+1)*n + (i+1)%n;
       const d = (j+1)*n + i;
-      // A twisted quad isn't planar, so the two triangles that approximate it always meet at a
-      // real dihedral crease along whichever diagonal we pick — splitting along the *shorter*
-      // diagonal keeps that crease smallest and least visible under directional light.
+      // A deformed quad isn't planar in general, so the two triangles that approximate it always
+      // meet at a real dihedral crease along whichever diagonal we pick — splitting along the
+      // *shorter* diagonal keeps that crease smallest and least visible under directional light.
       if(distSq(a,c) <= distSq(b,d)){
         indices.push(a,b,c, a,c,d);
       } else {
@@ -513,11 +567,10 @@ function buildTwistGeometry(profile, height, alphaMaxDeg, segs){
   const shapePts = profile.map(p => new THREE.Vector2(p[0], p[1]));
   const triangles = THREE.ShapeUtils.triangulateShape(shapePts, []);
 
-  function buildCap(y, angleDeg, flip){
-    const rad = angleDeg * Math.PI/180;
+  function buildCap(y, flip){
     const capPos = [];
     profile.forEach(p=>{
-      const [x,z] = rotate2D(p, rad);
+      const [x,z] = computeLayerPoint(mode, params, y, height, p);
       capPos.push(x, y, z);
     });
     const capIdx = [];
@@ -532,8 +585,8 @@ function buildTwistGeometry(profile, height, alphaMaxDeg, segs){
     return g;
   }
 
-  const bottomCap = buildCap(0, 0, true);
-  const topCap = buildCap(height, alphaMaxDeg, false);
+  const bottomCap = buildCap(0, true);
+  const topCap = buildCap(height, false);
 
   return { sideGeo, bottomCap, topCap, layerPositions: positions, segs, n };
 }
@@ -567,8 +620,11 @@ function rebuild(){
 
   const h = totalHeightM();
   const profile = PROFILES[state.preset]();
-  const { sideGeo, bottomCap, topCap, layerPositions, segs, n } = buildTwistGeometry(
-    profile, h, state.alphaMax, state.segments
+  const params = state.mode === 'taper'
+    ? { V: state.taperV, W: state.taperW }
+    : { alphaMax: state.alphaMax };
+  const { sideGeo, bottomCap, topCap, layerPositions, segs, n } = buildDeformedGeometry(
+    profile, h, state.segments, state.mode, params
   );
 
   const material = new THREE.MeshStandardMaterial({
@@ -625,10 +681,8 @@ function rebuild(){
     const floorMat = new THREE.LineBasicMaterial({ color: 0x2a241c, transparent:true, opacity:0.4 });
     for(let k=0; k<=state.floors; k++){
       const y = k * state.floorHeightM;
-      const angleDeg = (y/h) * state.alphaMax;
-      const rad = angleDeg * Math.PI/180;
       const pts = [];
-      profile.forEach(p=>{ const [x,z] = rotate2D(p, rad); pts.push(new THREE.Vector3(x, y, z)); });
+      profile.forEach(p=>{ const [x,z] = computeLayerPoint(state.mode, params, y, h, p); pts.push(new THREE.Vector3(x, y, z)); });
       pts.push(pts[0].clone());
       const floorGeo = new THREE.BufferGeometry().setFromPoints(pts);
       overlayGroup.add(new THREE.Line(floorGeo, floorMat));
@@ -670,35 +724,55 @@ function rebuild(){
   // point labels a,b,c (bottom) -> a1,b1,c1 (top), first up-to-3 profile verts
   if(state.overlays.labels){
     const names = ['a','b','c','d','e','f','g','h','i','j'];
-    const rad = state.alphaMax * Math.PI/180;
     for(let i=0;i<Math.min(n, names.length); i++){
       const bp = profile[i];
       const bLabel = spriteLabel(names[i], '#1a1a18');
       bLabel.position.set(bp[0]*1.12, 0.25, bp[1]*1.12);
       overlayGroup.add(bLabel);
 
-      const [tx,tz] = rotate2D(profile[i], rad);
+      const [tx,tz] = computeLayerPoint(state.mode, params, h, h, profile[i]);
       const tLabel = spriteLabel(names[i]+'₁', '#b23a2e');
       tLabel.position.set(tx*1.12, h+0.25, tz*1.12);
       overlayGroup.add(tLabel);
     }
   }
 
-  // HUD numbers — unit-aware
+  // HUD numbers — unit-aware and mode-aware
   const u = unitLabels();
   const baseArea = polygonArea(profile);
-  const volTwist = baseArea * h; // Cavalieri: identical to the straight prism
-  const volStraight = baseArea * h;
-  document.getElementById('hudAlpha').textContent = state.alphaMax.toFixed(0) + '°';
-  document.getElementById('hudHalf').textContent = (state.alphaMax/2).toFixed(1) + '°';
+  const volDeformed = computeDeformedVolume(state.mode, params, baseArea, h);
+  const volPrism = baseArea * h;
+
+  if(state.mode === 'taper'){
+    document.getElementById('hudParam1Label').textContent = 'v (x-scale @ top)';
+    document.getElementById('hudParam1').textContent = state.taperV.toFixed(2);
+    document.getElementById('hudParam2Label').textContent = 'w (y-scale @ top)';
+    document.getElementById('hudParam2').textContent = state.taperW.toFixed(2);
+  } else {
+    document.getElementById('hudParam1Label').textContent = 'α_max';
+    document.getElementById('hudParam1').textContent = state.alphaMax.toFixed(0) + '°';
+    document.getElementById('hudParam2Label').textContent = 'α at h/2';
+    document.getElementById('hudParam2').textContent = (state.alphaMax/2).toFixed(1) + '°';
+  }
   document.getElementById('hudHeight').textContent = toDisplayLen(h).toFixed(1) + ' ' + u.len;
   document.getElementById('hudArea').textContent = toDisplayArea(baseArea).toFixed(2) + ' ' + u.area;
-  document.getElementById('hudVolTwist').textContent = toDisplayVol(volTwist).toFixed(2) + ' ' + u.vol;
-  document.getElementById('hudVolStraight').textContent = toDisplayVol(volStraight).toFixed(2) + ' ' + u.vol;
+  document.getElementById('hudVolTwist').textContent = toDisplayVol(volDeformed).toFixed(2) + ' ' + u.vol;
+  document.getElementById('hudVolStraight').textContent = toDisplayVol(volPrism).toFixed(2) + ' ' + u.vol;
+
+  const matchEl = document.getElementById('hudMatch');
+  const ratio = volPrism > 0 ? volDeformed / volPrism : 1;
+  if(Math.abs(ratio - 1) < 0.001){
+    matchEl.textContent = 'volumes match — Cavalieri holds';
+  } else {
+    matchEl.textContent = `deformed volume is ${(ratio*100).toFixed(0)}% of the prism — tapering doesn't preserve volume`;
+  }
 
   controls.target.set(0, h/2, 0);
+  const paramSummary = state.mode === 'taper'
+    ? `Taper v${state.taperV.toFixed(2)} w${state.taperW.toFixed(2)}`
+    : `Twist α_max ${state.alphaMax}°`;
   document.getElementById('footRight').textContent =
-    `${PRESET_LABELS[state.preset]} · α_max ${state.alphaMax}° · ${state.floors} floors · h ${toDisplayLen(h).toFixed(1)}${u.len} · ${state.segments} slices`;
+    `${PRESET_LABELS[state.preset]} · ${paramSummary} · ${state.floors} floors · h ${toDisplayLen(h).toFixed(1)}${u.len} · ${state.segments} slices`;
 }
 
 // ---------- UI wiring ----------
@@ -719,12 +793,58 @@ Object.keys(PROFILES).forEach(key=>{
 });
 
 const alphaSlider = document.getElementById('alphaSlider');
+const taperVSlider = document.getElementById('taperVSlider');
+const taperWSlider = document.getElementById('taperWSlider');
 const floorsSlider = document.getElementById('floorsSlider');
 const floorHeightSlider = document.getElementById('floorHeightSlider');
 const resSlider = document.getElementById('resSlider');
 alphaSlider.value = state.alphaMax;
+taperVSlider.value = state.taperV;
+taperWSlider.value = state.taperW;
 floorsSlider.value = state.floors;
 resSlider.value = state.segments;
+
+const REFERENCE_TEXT = {
+  twist: `This is Fig. 13.3–13.6's twist operation: a fixed base plane B, a vertical axis A, and every
+    horizontal slice at height z rotated by α(z). Straight vertical edges become helices; a flat
+    wall through A becomes a helicoid. Try α_max = 90° and 180° to reproduce the two right-hand
+    figures on p.456, or push past 360° to see multiple full turns like the Turning Torso.`,
+  taper: `This is Fig. 13.7's tapering operation: base plane B and axis A stay fixed, and each slice is
+    scaled independently — factor v(z) in x, w(z) in y — linear from 1 at the base to v, w at the
+    top. It looks linear but isn't: per Fig. 13.8, a line that isn't parallel or orthogonal to A
+    maps to a parabola, not a straight line — only the profile's own vertical edges (parallel to A)
+    stay straight. And unlike twisting, tapering does not preserve volume: try v = w = 0.5 for a
+    simple frustum, or set v and w apart for an asymmetric taper.`
+};
+const FORMULA_HTML = {
+  twist: 'α(z) = (z/h)·α<sub>max</sub>',
+  taper: 'v(z)=1+z(v−1)/h, w(z)=1+z(w−1)/h'
+};
+const HUD_FORMULA_HTML = {
+  twist: 'α(z) = (z / h) · α<sub>max</sub>',
+  taper: 'v(z) = 1 + z·(v−1)/h'
+};
+
+const modeGrid = document.getElementById('modeGrid');
+function applyModeChrome(){
+  document.getElementById('modeTagline').textContent =
+    state.mode === 'taper' ? 'taper deformation, live' : 'twist deformation, live';
+  document.getElementById('formulaBadge').innerHTML = FORMULA_HTML[state.mode];
+  document.getElementById('hudFormula').innerHTML = HUD_FORMULA_HTML[state.mode];
+  document.getElementById('referenceText').textContent = REFERENCE_TEXT[state.mode];
+  document.getElementById('twistParamsBlock').style.display = state.mode === 'taper' ? 'none' : '';
+  document.getElementById('taperParamsBlock').style.display = state.mode === 'taper' ? '' : 'none';
+  [...modeGrid.children].forEach(b=>b.classList.toggle('active', b.dataset.mode === state.mode));
+}
+[...modeGrid.children].forEach(btn=>{
+  btn.addEventListener('click', ()=>{
+    state.mode = btn.dataset.mode;
+    applyModeChrome();
+    persist(); rebuild();
+    toast(state.mode === 'taper' ? 'Taper mode' : 'Twist mode');
+  });
+});
+applyModeChrome();
 
 const unitsGrid = document.getElementById('unitsGrid');
 [...unitsGrid.children].forEach(btn=>{
@@ -753,6 +873,8 @@ syncFloorHeightSliderRange();
 function syncSliderLabels(){
   const u = unitLabels();
   document.getElementById('alphaVal').textContent = state.alphaMax + '°';
+  document.getElementById('taperVVal').textContent = state.taperV.toFixed(2);
+  document.getElementById('taperWVal').textContent = state.taperW.toFixed(2);
   document.getElementById('floorsVal').textContent = state.floors;
   document.getElementById('floorHeightVal').textContent = toDisplayLen(state.floorHeightM).toFixed(1) + ' ' + u.len;
   document.getElementById('resVal').textContent = state.segments;
@@ -763,6 +885,14 @@ syncSliderLabels();
 
 alphaSlider.addEventListener('input', e=>{
   state.alphaMax = parseFloat(e.target.value);
+  syncSliderLabels(); persist(); rebuild();
+});
+taperVSlider.addEventListener('input', e=>{
+  state.taperV = parseFloat(e.target.value);
+  syncSliderLabels(); persist(); rebuild();
+});
+taperWSlider.addEventListener('input', e=>{
+  state.taperW = parseFloat(e.target.value);
   syncSliderLabels(); persist(); rebuild();
 });
 floorsSlider.addEventListener('input', e=>{
