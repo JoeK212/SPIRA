@@ -4,6 +4,22 @@ Interactive explorer of architectural deformation operations — twisting, taper
 Joe.K · axisbim.io
 
 CHANGELOG
+v1.21.0 - 2026-07-18 - Graphics consistency audit, per user request ("really big axis lines... this
+         should be audited and reviewed"). Found and fixed three real issues: (1) Base plane B was a
+         hardcoded size=4.2 regardless of the actual model — fine at classroom scale, but far smaller
+         than the solid itself on any real-building case study (Cayan Tower's footprint alone is
+         ~22m). Now derived from the model's own planar (x,z) bounding extent via layerPositions, so
+         it's correct for every mode without per-mode special-casing. (2) Axis arrowhead cones were
+         hardcoded (0.09, 0.3) — invisible on a 300m case study, oversized on a small model. Now
+         scale with height via the same Math.max(proportional, floor) pattern already used for the
+         origin marker/FFD handles/normals overlay. (3) Floor lines had two different techniques
+         solving the identical z-fighting problem depending on mode (profile-coordinate scaling for
+         non-helix, centroid-based nudge for helix, itself only added last session to fix Pipe) —
+         unified on the single centroid-based technique everywhere. Also trimmed the Axis A overshoot
+         ratio 1.35x -> 1.15x — always scaled correctly with model height (not a bug), but read as
+         oversized/dominant, especially now that case studies make the line long in absolute terms
+         too. Verified the new size formulas numerically across small/classroom and real-building
+         (Cayan Tower, The Shard) scale before shipping.
 v1.20.0 - 2026-07-18 - Added a "Surface normals (debug)" overlay, off by default, per user request
          after a session of chasing normal-orientation bugs (inward-facing Circle/Pipe and Ellipse
          normals, both caught only via headless Node scripts before shipping). One short outward
@@ -990,7 +1006,7 @@ v1.0.0 - 2026-07-17 - Initial build. Twist operation on four cross-section prese
 <script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
 <script src="https://cdn.jsdelivr.net/npm/three@0.128.0/examples/js/controls/OrbitControls.js"></script>
 <script>
-const APP_VERSION = '1.20.0';
+const APP_VERSION = '1.21.0';
 
 // ---------- toast ----------
 let toastTimer=null;
@@ -2051,33 +2067,25 @@ function rebuild(){
   // on u=k·2π since h=turns·pitch and totalAngle=turns·2π, so the same per-k evaluation works.
   if(state.overlays.floorlines){
     // Paper-white reads as a crisp contour against the blue-gray solid — every other overlay color
-    // (brick for rulings, ochre for slice rings, prussian for the axis) is already spoken for, and a
-    // light line pops by brightness contrast rather than competing on hue. The nudge pushes the ring
-    // just outside the mesh's own surface (which sits at these exact same coordinates), avoiding the
-    // z-fighting that was making the old dark, coincident line nearly invisible.
+    // (brick for rulings, ochre for slice rings/base plane, prussian for the axis) is already spoken
+    // for, and a light line pops by brightness contrast rather than competing on hue. The nudge
+    // pushes the ring just outside the mesh's own surface (which sits at these exact same
+    // coordinates), avoiding the z-fighting that was making the old dark, coincident line nearly
+    // invisible — same generic centroid-based nudge slice rings use (v1.14.2), applied uniformly
+    // here across every mode via layerPointFn rather than the profile-coordinate-scaling approach
+    // this used to use for non-helix modes specifically: two different techniques for the identical
+    // problem, and the scaling one didn't generalize (it broke for Helix's Pipe generator, whose
+    // profile point is a bare angle rather than an [x,z]-like pair — fixed by unifying on this).
     const floorMat = new THREE.LineBasicMaterial({ color: 0xfbfaf6, transparent:true, opacity:0.95 });
     const loopCount = state.mode === 'helix' ? state.helixTurns : state.floors;
     const stepM = state.mode === 'helix' ? state.helixPitchM : state.floorHeightM;
     for(let k=0; k<=loopCount; k++){
       const y = k * stepM;
-      let pts;
-      if(state.mode === 'helix'){
-        // layerPointFn (not computeLayerPoint directly) so this is correct for Pipe too — Pipe's
-        // genPt is a bare angle, not a [radial, height-offset] pair, so the *1.03 profile-scale
-        // nudge the non-helix branch below uses would silently rotate the ring instead of pushing
-        // it outward. A generic centroid-based nudge (same technique the slice-rings overlay uses,
-        // v1.14.2) works the same way regardless of which generator built the ring.
-        const raw = profile.map(p => { const [x,yOut,z] = layerPointFn(y, p); return new THREE.Vector3(x,yOut,z); });
-        const centroid = new THREE.Vector3();
-        raw.forEach(v => centroid.add(v));
-        centroid.divideScalar(raw.length);
-        pts = raw.map(v => v.clone().add(new THREE.Vector3().subVectors(v, centroid).multiplyScalar(0.02)));
-      } else {
-        pts = profile.map(p => {
-          const [x,yOut,z] = computeLayerPoint(state.mode, params, y, h, [p[0]*1.03, p[1]*1.03]);
-          return new THREE.Vector3(x, yOut, z);
-        });
-      }
+      const raw = profile.map(p => { const [x,yOut,z] = layerPointFn(y, p); return new THREE.Vector3(x,yOut,z); });
+      const centroid = new THREE.Vector3();
+      raw.forEach(v => centroid.add(v));
+      centroid.divideScalar(raw.length);
+      const pts = raw.map(v => v.clone().add(new THREE.Vector3().subVectors(v, centroid).multiplyScalar(0.02)));
       pts.push(pts[0].clone());
       const floorGeo = new THREE.BufferGeometry().setFromPoints(pts);
       overlayGroup.add(new THREE.Line(floorGeo, floorMat));
@@ -2089,7 +2097,15 @@ function rebuild(){
   // (solid, brick) shows where it actually went — a straight line for shear, a sampled curve for
   // bend's circular arc. Twist and taper fix the axis, so they just get the single solid line.
   if(state.overlays.axis && state.mode !== 'ffd'){
-    const axisTop = h * 1.35;
+    // Axis line extends past the top of the solid by design (shows the theoretical axis continuing
+    // beyond the form), always scaled to model height so this was never a bug — but 35% read as
+    // oversized/dominant in practice, especially at real-building case-study scale where the line is
+    // also long in absolute terms. Trimmed to a more restrained 15% overshoot.
+    const axisTop = h * 1.15;
+    // Arrowhead cone size was a hardcoded (0.09, 0.3) regardless of model scale — invisible on a
+    // 300m-tall case study, disproportionately large on a small classroom-scale model. Same
+    // Math.max(proportional, floor) pattern as the origin marker/FFD handles/normals overlay below.
+    const coneR = Math.max(h*0.012, 0.06), coneH = coneR * 3.3;
     if(state.mode === 'shear' || state.mode === 'bend'){
       const aGeo = new THREE.BufferGeometry().setFromPoints([
         new THREE.Vector3(0,0,0), new THREE.Vector3(0, axisTop, 0)
@@ -2116,7 +2132,7 @@ function rebuild(){
       const prev = a1Points[a1Points.length-2];
       const tipDir = new THREE.Vector3().subVectors(tip, prev).normalize();
       const cone = new THREE.Mesh(
-        new THREE.ConeGeometry(0.09, 0.3, 12),
+        new THREE.ConeGeometry(coneR, coneH, 12),
         new THREE.MeshBasicMaterial({ color: 0x9c3226 })
       );
       cone.quaternion.setFromUnitVectors(new THREE.Vector3(0,1,0), tipDir);
@@ -2129,7 +2145,7 @@ function rebuild(){
       const axisMat = new THREE.LineBasicMaterial({ color: 0x1f4e79 });
       overlayGroup.add(new THREE.Line(axisGeo, axisMat));
       const cone = new THREE.Mesh(
-        new THREE.ConeGeometry(0.09, 0.3, 12),
+        new THREE.ConeGeometry(coneR, coneH, 12),
         new THREE.MeshBasicMaterial({ color: 0x1f4e79 })
       );
       cone.position.set(0, axisTop, 0);
@@ -2152,9 +2168,20 @@ function rebuild(){
     overlayGroup.add(originLabel);
   }
 
-  // base plane B
+  // base plane B — size was a hardcoded 4.2 regardless of the actual model, so it rendered far
+  // smaller than the solid itself on any real-building-scale case study (Cayan Tower's footprint
+  // alone is ~22m). Now derived from the model's own planar (x,z) bounding extent, computed
+  // generically from layerPositions rather than per-mode logic, so it's correct for every preset
+  // and every Helix generator without needing to special-case any of them.
   if(state.overlays.plane){
-    const size = 4.2;
+    let minX=Infinity, maxX=-Infinity, minZ=Infinity, maxZ=-Infinity;
+    for(let idx=0; idx<layerPositions.length; idx+=3){
+      const px = layerPositions[idx], pz = layerPositions[idx+2];
+      if(px<minX) minX=px; if(px>maxX) maxX=px;
+      if(pz<minZ) minZ=pz; if(pz>maxZ) maxZ=pz;
+    }
+    const planarExtent = Math.max(maxX-minX, maxZ-minZ, 0.1);
+    const size = Math.max(planarExtent * 1.6, 3);
     const planeGeo = new THREE.PlaneGeometry(size, size);
     const planeMat = new THREE.MeshBasicMaterial({ color:0xc8932a, transparent:true, opacity:0.14, side:THREE.DoubleSide });
     const planeMesh = new THREE.Mesh(planeGeo, planeMat);
@@ -2207,9 +2234,13 @@ function rebuild(){
   // the exact same finite-difference technique the mesh builders themselves use for their own
   // analytic normals (v1.14.3 for twist/taper/shear/bend/ffd, v1.17.1 for helix, v1.18.0 for
   // ellipse), rather than a separate approximation — this overlay is meant to show what the render
-  // mesh is actually doing, corners included, not a simplified stand-in for it.
+  // mesh is actually doing, corners included, not a simplified stand-in for it. Color is a cool
+  // violet, deliberately outside the rest of the overlay palette (brick/ochre/prussian/paper-white)
+  // rather than a nearby orange that read as a shade of the existing ochre (slice rings, base plane)
+  // when both were on at once — a debug-only overlay should be visually unmistakable from the
+  // others, not just technically distinct.
   if(state.overlays.normals){
-    const normalMat = new THREE.LineBasicMaterial({ color: 0xd4820a });
+    const normalMat = new THREE.LineBasicMaterial({ color: 0x6a3d9a });
     const normalLen = Math.max(h*0.03, 0.4);
     const loopCount = state.mode === 'helix' ? state.helixTurns : state.floors;
     const stepM = state.mode === 'helix' ? state.helixPitchM : state.floorHeightM;
