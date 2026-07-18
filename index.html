@@ -4,6 +4,18 @@ Interactive explorer of architectural deformation operations — twisting, taper
 Joe.K · axisbim.io
 
 CHANGELOG
+v1.10.0 - 2026-07-18 - Added "Export as .sat" (ACIS solid, sidebar Export section) — exports the
+         current mode's mesh as a faceted ACIS body: every on-screen triangle becomes one exact
+         planar ACIS face (no curve-fitting, since buildDeformedGeometry/buildHelicalGeometry
+         already only ever emit triangles). Weld-dedupes shared vertices, builds edge/coedge
+         partner links from triangle adjacency so closed modes (twist/taper/shear/bend/free) export
+         as a proper solid BODY and Helix's open ribbon/tube exports as an open sheet body (free
+         edges get a null partner coedge instead of a matching one). Coordinates convert meters →
+         millimeters on export. Targets ACIS SAT version 700, chosen to match the field layout
+         documented against real BricsCAD-exported files (mozman/ezdxf project) cross-checked with
+         Spatial's own SAT-format chapter for the header/BODY/LUMP/SHELL/FACE/LOOP records — not
+         verified against a live ACIS kernel, since none is available in this environment, so a
+         freshly exported file's first import into Rhino/AutoCAD/BricsCAD is the actual test.
 v1.9.0 - 2026-07-18 - Three requests. (1) A "Reset values" button on every operation's params block
          (twist/taper/shear/bend/helix; FFD's existing "Reset control points" folded into the same
          system), restoring that mode's own parameters — and, for the five height-based modes, floors/
@@ -572,6 +584,16 @@ v1.0.0 - 2026-07-17 - Initial build. Twist operation on four cross-section prese
     </section>
 
     <section class="group">
+      <h3>Export</h3>
+      <button class="btn secondary" id="exportSatBtn" style="width:100%;">Export as .sat (ACIS solid)</button>
+      <div style="font-size:0.72rem; line-height:1.5; color:var(--muted); margin-top:6px;">
+        Exports the current solid as a faceted ACIS body — every triangle on screen becomes one
+        flat face, so geometry matches exactly what's rendered. Twist/Taper/Shear/Bend/Free export
+        as a closed solid; Helix's open ribbon/tube exports as an open sheet body.
+      </div>
+    </section>
+
+    <section class="group">
       <h3>Reference</h3>
       <div style="font-size:0.76rem; line-height:1.6; color:var(--muted);" id="referenceText">
         This is Fig. 13.3–13.6's twist operation: a fixed base plane B, a vertical axis A, and every
@@ -593,7 +615,7 @@ v1.0.0 - 2026-07-17 - Initial build. Twist operation on four cross-section prese
 <script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
 <script src="https://cdn.jsdelivr.net/npm/three@0.128.0/examples/js/controls/OrbitControls.js"></script>
 <script>
-const APP_VERSION = '1.9.0';
+const APP_VERSION = '1.10.0';
 
 // ---------- toast ----------
 let toastTimer=null;
@@ -1948,6 +1970,185 @@ function resetModeValues(mode){
 document.querySelectorAll('.reset-btn').forEach(btn=>{
   btn.addEventListener('click', ()=> resetModeValues(btn.dataset.resetmode));
 });
+
+// ---------- .sat export (ACIS SAT, faceted B-rep — flat triangular planar faces) ----------
+// Targets ACIS SAT version 700, the version documented (by the ezdxf project, cross-checked
+// against real ACIS 4.0-era Spatial docs for header/BODY/LUMP/SHELL/FACE/LOOP fields) as broadly
+// readable by AutoCAD-, BricsCAD-, and Rhino-class ACIS consumers. Every triangle already on
+// screen becomes one exact planar ACIS face — buildDeformedGeometry/buildHelicalGeometry always
+// emit triangles (never non-planar quads), so no curve-fitting or approximation is introduced
+// beyond what's already rendered. Twist/Taper/Shear/Bend/Free are closed meshes and export as a
+// solid BODY; Helix's open ribbon/tube exports as an open sheet body (boundary edges get a -1
+// partner coedge instead of a matching one). NOTE: built from the documented record layout, not
+// verified against a live ACIS kernel — there's no ACIS SDK available in this environment to test
+// against, so treat the first Rhino/AutoCAD/BricsCAD import of an export as the real test.
+
+function collectCurrentTrianglesM(){
+  const tris = [];
+  solidGroup.children.forEach(mesh=>{
+    const geo = mesh.geometry;
+    const pos = geo.attributes.position;
+    const idx = geo.index;
+    const readVert = i => [pos.getX(i), pos.getY(i), pos.getZ(i)];
+    if(idx){
+      for(let i=0;i<idx.count;i+=3){
+        tris.push([readVert(idx.getX(i)), readVert(idx.getX(i+1)), readVert(idx.getX(i+2))]);
+      }
+    } else {
+      for(let i=0;i<pos.count;i+=3){
+        tris.push([readVert(i), readVert(i+1), readVert(i+2)]);
+      }
+    }
+  });
+  return tris;
+}
+
+function satNum(n){
+  if(Object.is(n,-0)) n = 0;
+  return Number(n.toFixed(9)).toString();
+}
+
+function satCtimeLike(d){
+  const days=['Sun','Mon','Tue','Wed','Thu','Fri','Sat'];
+  const months=['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec'];
+  const pad = n => String(n).padStart(2,'0');
+  return `${days[d.getDay()]} ${months[d.getMonth()]} ${pad(d.getDate())} ${pad(d.getHours())}:${pad(d.getMinutes())}:${pad(d.getSeconds())} ${d.getFullYear()}`;
+}
+
+function buildSatText(){
+  const trisM = collectCurrentTrianglesM();
+  if(!trisM.length) return null;
+
+  const MM = 1000; // export in millimeters (header declares 1 unit = 1mm)
+  const vertMap = new Map();
+  const verts = [];
+  function weld(pt){
+    const x = pt[0]*MM, y = pt[1]*MM, z = pt[2]*MM;
+    const k = `${Math.round(x*1e4)}|${Math.round(y*1e4)}|${Math.round(z*1e4)}`;
+    let idx = vertMap.get(k);
+    if(idx === undefined){ idx = verts.length; verts.push([x,y,z]); vertMap.set(k, idx); }
+    return idx;
+  }
+  const triIdx = [];
+  trisM.forEach(t=>{
+    const a=weld(t[0]), b=weld(t[1]), c=weld(t[2]);
+    if(a!==b && b!==c && a!==c) triIdx.push([a,b,c]);
+  });
+  const nTri = triIdx.length;
+  if(!nTri) return null;
+
+  let nextId = 0;
+  const lines = [];
+  const alloc = () => nextId++;
+  const setLine = (id, text) => { lines[id] = text; };
+
+  const bodyId = alloc(), lumpId = alloc(), shellId = alloc();
+
+  const faceIds = [], loopIds = [], coedgeIds = [], surfIds = [];
+  for(let i=0;i<nTri;i++){
+    faceIds.push(alloc());
+    loopIds.push(alloc());
+    coedgeIds.push([alloc(), alloc(), alloc()]);
+    surfIds.push(alloc());
+  }
+
+  const edgeKey = (a,b) => a<b ? `${a}_${b}` : `${b}_${a}`;
+  const edgeRegistry = new Map();
+  const triEdgeRef = triIdx.map(()=>[null,null,null]);
+  triIdx.forEach((t, ti)=>{
+    for(let s=0;s<3;s++){
+      const a = t[s], b = t[(s+1)%3];
+      const k = edgeKey(a,b);
+      let rec = edgeRegistry.get(k);
+      if(!rec){
+        rec = { edgeId: alloc(), curveId: alloc(), v1: Math.min(a,b), v2: Math.max(a,b), uses: [] };
+        edgeRegistry.set(k, rec);
+      }
+      rec.uses.push({ tri: ti, slot: s, dirForward: a === rec.v1 });
+      triEdgeRef[ti][s] = rec;
+    }
+  });
+
+  const vertexIds = [], pointIds = [];
+  for(let i=0;i<verts.length;i++){ vertexIds.push(alloc()); pointIds.push(alloc()); }
+
+  // body / lump / shell
+  setLine(bodyId, `body $-1 $${lumpId} $-1 $-1 #`);
+  setLine(lumpId, `lump $-1 $-1 $${shellId} $${bodyId} #`);
+  setLine(shellId, `shell $-1 $-1 $-1 $${faceIds[0]} $-1 $${lumpId} #`);
+
+  // faces / loops / coedges / plane-surfaces
+  for(let i=0;i<nTri;i++){
+    const nextFace = i+1<nTri ? `$${faceIds[i+1]}` : '$-1';
+    setLine(faceIds[i], `face $-1 ${nextFace} $${loopIds[i]} $${shellId} $-1 $${surfIds[i]} forward single #`);
+    setLine(loopIds[i], `loop $-1 $-1 $${coedgeIds[i][0]} $${faceIds[i]} #`);
+
+    for(let s=0;s<3;s++){
+      const cid = coedgeIds[i][s];
+      const nId = coedgeIds[i][(s+1)%3], pId = coedgeIds[i][(s+2)%3];
+      const rec = triEdgeRef[i][s];
+      const mine = rec.uses.find(u=>u.tri===i && u.slot===s);
+      const other = rec.uses.find(u=>!(u.tri===i && u.slot===s));
+      const partner = other ? `$${coedgeIds[other.tri][other.slot]}` : '$-1';
+      const sense = mine.dirForward ? 0 : 1;
+      setLine(cid, `coedge $-1 $${nId} $${pId} ${partner} $${rec.edgeId} ${sense} $${loopIds[i]} $-1 #`);
+    }
+
+    const t = triIdx[i];
+    const p0 = verts[t[0]], p1 = verts[t[1]], p2 = verts[t[2]];
+    const ux=p1[0]-p0[0], uy=p1[1]-p0[1], uz=p1[2]-p0[2];
+    const vx=p2[0]-p0[0], vy=p2[1]-p0[1], vz=p2[2]-p0[2];
+    let nx = uy*vz - uz*vy, ny = uz*vx - ux*vz, nz = ux*vy - uy*vx;
+    const nlen = Math.hypot(nx,ny,nz) || 1;
+    nx/=nlen; ny/=nlen; nz/=nlen;
+    const ulen = Math.hypot(ux,uy,uz) || 1;
+    setLine(surfIds[i], `plane-surface $-1 ${satNum(p0[0])} ${satNum(p0[1])} ${satNum(p0[2])} ${satNum(nx)} ${satNum(ny)} ${satNum(nz)} ${satNum(ux/ulen)} ${satNum(uy/ulen)} ${satNum(uz/ulen)} forward_v I I I I #`);
+  }
+
+  // edges / straight-curves
+  edgeRegistry.forEach(rec=>{
+    setLine(rec.edgeId, `edge $-1 $${vertexIds[rec.v1]} $${vertexIds[rec.v2]} $-1 $${rec.curveId} forward unknown #`);
+    const p1 = verts[rec.v1], p2 = verts[rec.v2];
+    let dx=p2[0]-p1[0], dy=p2[1]-p1[1], dz=p2[2]-p1[2];
+    const len = Math.hypot(dx,dy,dz) || 1;
+    setLine(rec.curveId, `straight-curve $-1 ${satNum(p1[0])} ${satNum(p1[1])} ${satNum(p1[2])} ${satNum(dx/len)} ${satNum(dy/len)} ${satNum(dz/len)} I I #`);
+  });
+
+  // vertices / points
+  for(let i=0;i<verts.length;i++){
+    setLine(vertexIds[i], `vertex $-1 $-1 $${pointIds[i]} #`);
+    const p = verts[i];
+    setLine(pointIds[i], `point $-1 ${satNum(p[0])} ${satNum(p[1])} ${satNum(p[2])} #`);
+  }
+
+  const now = new Date();
+  const productStr = 'SPIRA (Axis BIM)';
+  const versionStr = 'ACIS 7.0 NT';
+  const dateStr = satCtimeLike(now);
+  const header =
+    `700 0 1 0\n` +
+    `${productStr.length} ${productStr} ${versionStr.length} ${versionStr} ${dateStr.length} ${dateStr}\n` +
+    `1 9.9999999999999995e-007 1e-010`;
+
+  return { text: header + '\n' + lines.join('\n') + '\nEnd-of-ACIS-data\n', faceCount: nTri };
+}
+
+function exportSAT(){
+  const result = buildSatText();
+  if(!result){ toast('Nothing to export yet'); return; }
+  const blob = new Blob([result.text], {type:'text/plain'});
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement('a');
+  const stamp = new Date().toISOString().slice(0,19).replace(/[:T]/g,'-');
+  a.href = url;
+  a.download = `SPIRA_${state.mode}_${stamp}.sat`;
+  document.body.appendChild(a);
+  a.click();
+  document.body.removeChild(a);
+  URL.revokeObjectURL(url);
+  toast(`Exported .sat — ${result.faceCount.toLocaleString()} faces`);
+}
+document.getElementById('exportSatBtn').addEventListener('click', exportSAT);
 
 document.getElementById('viewTopBtn').addEventListener('click', ()=>{ frameCameraTop(); toast('Top view'); });
 document.getElementById('viewFrontBtn').addEventListener('click', ()=>{ frameCameraFront(); toast('Front / elevation view'); });

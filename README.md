@@ -83,6 +83,11 @@ viewport for standard orthographic-ish framing, alongside the usual orbit/pan/zo
 labeled "0,0,0" is always visible at the true world origin when the Axis overlay is on, as a fixed
 reference point regardless of view.
 
+**Export.** The current solid can be exported as a faceted ACIS (.sat) body — every triangle
+already on screen becomes one exact planar ACIS face, so the export matches the render exactly
+with no curve-fitting. Twist/Taper/Shear/Bend/Free export as a closed solid; Helix's open
+ribbon/tube exports as an open sheet body.
+
 Single HTML file, no build step, Three.js (r128) via CDN. Deployed via GitHub → Netlify
 continuous deployment.
 
