@@ -1,9 +1,53 @@
 <!--
 SPIRA
-Interactive explorer of architectural deformation operations — twisting, tapering, shearing, and bending — with a live solid and volume readout
+Interactive explorer of architectural deformation operations — twisting, tapering, shearing, bending, freeform (FFD), and helical sweeps — with a live solid and volume/area readout
 Joe.K · axisbim.io
 
 CHANGELOG
+v1.7.0 - 2026-07-18 - Added Helix as a sixth operation (Fig. 9.53-9.60, ch.9 "Helical Surfaces" —
+         a different chapter from the other five, which are all ch.13 solid deformations). This is a
+         genuinely different construction, not a variant of the shared deformation engine: rather than
+         extruding a cross-section along the axis and deforming each slice, a generator/meridian curve
+         (radial, height-offset) is swept by true helical motion — rotation by u about axis A combined
+         with translation p·u along it — per the book's x(u,v)=X(v)cosu, y(u,v)=X(v)sinu, z(u,v)=z(v)+pu
+         (axis renamed to match this app's vertical y, so the meridian curve's own two coordinates are
+         radial X(v) and height-offset Y(v)). Two generator types, both using the book's simplified
+         meridian formula directly (no Frenet frame needed since each generator already lies flat in the
+         meridian plane at u=0): "Line" is the common/right helicoid (Fig. 9.56-9.57) — a straight
+         segment orthogonal to the axis, producing the classic open spiral ramp/staircase surface, with
+         adjustable inner radius (central void) and outer radius; "Circle" is a circle lying in the
+         meridian plane (Fig. 9.55, middle) — a winding tube/screw-column, capped with fan-triangulated
+         disks at both open ends. Deliberately did NOT implement the book's third variant (Fig. 9.55,
+         bottom) — a circle held orthogonal to the helix's own tangent, the "true" constant-radius pipe
+         — since that needs a moving Frenet frame along the 3D helix rather than the flat-meridian
+         formula; noted as a known omission in the in-app reference text rather than silently skipped.
+         Height here is turns × pitch (rise per full revolution) instead of floors × floor-height, so
+         the floors/floor-height controls are swapped for a Turns/Pitch block specific to this mode, and
+         "Floor lines" is reused as "Turn lines" (a ring — or for Line, a radial spoke — at each full
+         revolution) rather than adding a parallel overlay. A helicoid isn't a solid — the common
+         helicoid literally has a hole around the axis and zero thickness — so there's no volume to
+         report; the HUD's volume rows are repurposed to surface area (measured via triangle-area
+         summation over the built mesh, since no closed form exists here either) and generator length,
+         with the Cavalieri-style match row repurposed to name which book figure/surface is showing.
+         Ruling lines, slice rings, the fixed axis A overlay, and point labels all fall out of the
+         existing generic code paths for free (they only depend on the returned layer-positions/segs/n
+         shape, not on which mode built them) — only the floor→turn-lines ring code and point-label
+         bottom-anchor position needed small mode branches.
+v1.6.0 - 2026-07-17 - Added Free (freeform deformation) as a fifth operation (Fig. 13.17-13.20),
+         the odd one out architecturally: no axis, no base plane — the whole solid sits in a
+         bounding cuboid with 8 corner control points, and every point is a trilinear (1,1,1)
+         Bézier blend of all 8. Implemented with actual draggable 3D handles rather than sliders:
+         pointerdown raycasts against 8 brick sphere meshes, then drag intersects a camera-facing
+         plane through the grabbed handle (the standard screen-space-drag technique) and rebuilds
+         live on every pointermove. Control points are stored as offsets from their default corner
+         position rather than absolute coordinates, so they track sensibly when the preset or
+         height changes instead of going stale. FFD has no closed-form volume (an arbitrary warp
+         can do anything to it), so its volume readout comes from a new computeMeshVolume() —
+         numeric integration via the divergence theorem over the actual built triangles — the first
+         mode where the HUD number is measured rather than derived. Verified in a from-scratch
+         harness: control points at their defaults reproduce the straight prism's volume to
+         floating-point precision (the trilinear-interpolation-of-a-box's-own-corners identity),
+         and a dragged corner visibly changes it, across all four presets.
 v1.5.0 - 2026-07-17 - Added Bend as a fourth operation (Fig. 13.15-13.16, radial bending): the axis
          A maps to a circular arc A1 of radius R = h/β, chosen so the arc length exactly equals the
          original axis length h (the book's "typical" equal-length convention), and each slice is
@@ -70,7 +114,7 @@ v1.0.0 - 2026-07-17 - Initial build. Twist operation on four cross-section prese
 <meta name="apple-mobile-web-app-capable" content="yes">
 <meta name="mobile-web-app-capable" content="yes">
 <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
-<meta name="description" content="Interactive explorer of architectural deformation operations — twisting, tapering, shearing, and bending — with a live solid and volume readout.">
+<meta name="description" content="Interactive explorer of architectural deformation operations — twisting, tapering, shearing, bending, freeform (FFD), and helical sweeps — with a live solid and volume/area readout.">
 <meta name="theme-color" content="#f4f1ea" id="themeColorMeta">
 <title>SPIRA — Deformation Geometry Explorer</title>
 <style>
@@ -121,7 +165,7 @@ v1.0.0 - 2026-07-17 - Initial build. Twist operation on four cross-section prese
   }
   #viewport{flex:1; position:relative; min-width:0;}
   #canvasHost{position:absolute; inset:0;}
-  #canvasHost canvas{display:block; width:100%; height:100%;}
+  #canvasHost canvas{display:block; width:100%; height:100%; touch-action:none;}
 
   #hud{
     position:absolute; left:14px; top:14px;
@@ -256,9 +300,9 @@ v1.0.0 - 2026-07-17 - Initial build. Twist operation on four cross-section prese
       <div class="row"><span class="label" id="hudParam1Label">α_max</span><span class="val mono" id="hudParam1">0°</span></div>
       <div class="row"><span class="label" id="hudParam2Label">α at h/2</span><span class="val mono" id="hudParam2">0°</span></div>
       <div class="row"><span class="label">height (h)</span><span class="val mono" id="hudHeight">–</span></div>
-      <div class="row"><span class="label">base area</span><span class="val mono" id="hudArea">–</span></div>
-      <div class="row"><span class="label">deformed volume</span><span class="val mono" id="hudVolTwist">–</span></div>
-      <div class="row"><span class="label">prism volume</span><span class="val mono" id="hudVolStraight">–</span></div>
+      <div class="row"><span class="label" id="hudAreaLabel">base area</span><span class="val mono" id="hudArea">–</span></div>
+      <div class="row"><span class="label" id="hudVolTwistLabel">deformed volume</span><span class="val mono" id="hudVolTwist">–</span></div>
+      <div class="row"><span class="label" id="hudVolStraightLabel">prism volume</span><span class="val mono" id="hudVolStraight">–</span></div>
       <div class="row vol-match" id="hudMatch">volumes match — Cavalieri holds</div>
     </div>
   </div>
@@ -266,15 +310,17 @@ v1.0.0 - 2026-07-17 - Initial build. Twist operation on four cross-section prese
   <aside>
     <section class="group">
       <h3>Operation</h3>
-      <div class="presets" id="modeGrid">
+      <div class="presets" id="modeGrid" style="grid-template-columns:1fr 1fr 1fr;">
         <button class="preset-btn active" data-mode="twist">Twist</button>
         <button class="preset-btn" data-mode="taper">Taper</button>
         <button class="preset-btn" data-mode="shear">Shear</button>
         <button class="preset-btn" data-mode="bend">Bend</button>
+        <button class="preset-btn" data-mode="ffd">Free</button>
+        <button class="preset-btn" data-mode="helix">Helix</button>
       </div>
     </section>
 
-    <section class="group">
+    <section class="group" id="crossSectionSection">
       <h3>Cross-section (profile in plane B)</h3>
       <div class="presets" id="presetGrid"></div>
     </section>
@@ -321,14 +367,63 @@ v1.0.0 - 2026-07-17 - Initial build. Twist operation on four cross-section prese
           <input type="range" id="bendBetaSlider" min="-360" max="360" step="1" value="180">
         </div>
       </div>
-      <div class="slider-row">
-        <div class="top"><span>floors</span><span class="val" id="floorsVal">8</span></div>
-        <input type="range" id="floorsSlider" min="1" max="60" step="1" value="8">
+      <div id="ffdParamsBlock" style="display:none;">
+        <div style="font-size:0.78rem; color:var(--muted); margin-bottom:10px; line-height:1.5;">
+          Drag any of the 8 brick control points in the viewport — the solid follows a trilinear
+          Bézier blend of all 8, live.
+        </div>
+        <button class="btn secondary" id="ffdResetBtn" style="width:100%;">Reset control points</button>
       </div>
-      <div class="slider-row">
-        <div class="top"><span>floor-to-floor height</span><span class="val" id="floorHeightVal">3.5 m</span></div>
-        <input type="range" id="floorHeightSlider" min="2.5" max="6" step="0.1" value="3.5">
-        <div style="font-size:0.72rem; color:var(--muted); margin-top:2px;" id="totalHeightNote"></div>
+      <div id="helixParamsBlock" style="display:none;">
+        <div style="font-size:0.78rem; color:var(--muted); margin-bottom:8px;">
+          Generator curve (swept helically about axis A)
+        </div>
+        <div class="presets" id="helixGenGrid" style="grid-template-columns:1fr 1fr; margin-bottom:12px;">
+          <button class="preset-btn active" data-helixgen="line">Line (ramp)</button>
+          <button class="preset-btn" data-helixgen="circle">Circle (tube)</button>
+        </div>
+        <div id="helixLineParams">
+          <div class="slider-row">
+            <div class="top"><span>inner radius (void at axis)</span><span class="val" id="helixRInnerVal">0.3 m</span></div>
+            <input type="range" id="helixRInnerSlider" min="0" max="3" step="0.1" value="0.3">
+          </div>
+          <div class="slider-row">
+            <div class="top"><span>outer radius</span><span class="val" id="helixROuterVal">2.2 m</span></div>
+            <input type="range" id="helixROuterSlider" min="0.5" max="6" step="0.1" value="2.2">
+          </div>
+        </div>
+        <div id="helixCircleParams" style="display:none;">
+          <div class="slider-row">
+            <div class="top"><span>tube radius</span><span class="val" id="helixTubeRVal">0.25 m</span></div>
+            <input type="range" id="helixTubeRSlider" min="0.05" max="1" step="0.01" value="0.25">
+          </div>
+          <div class="slider-row">
+            <div class="top"><span>tube offset from axis</span><span class="val" id="helixTubeOffsetVal">1.5 m</span></div>
+            <input type="range" id="helixTubeOffsetSlider" min="0" max="4" step="0.1" value="1.5">
+          </div>
+        </div>
+      </div>
+      <div id="commonHeightBlock">
+        <div class="slider-row">
+          <div class="top"><span>floors</span><span class="val" id="floorsVal">8</span></div>
+          <input type="range" id="floorsSlider" min="1" max="60" step="1" value="8">
+        </div>
+        <div class="slider-row">
+          <div class="top"><span>floor-to-floor height</span><span class="val" id="floorHeightVal">3.5 m</span></div>
+          <input type="range" id="floorHeightSlider" min="2.5" max="6" step="0.1" value="3.5">
+          <div style="font-size:0.72rem; color:var(--muted); margin-top:2px;" id="totalHeightNote"></div>
+        </div>
+      </div>
+      <div id="helixHeightBlock" style="display:none;">
+        <div class="slider-row">
+          <div class="top"><span>turns (revolutions)</span><span class="val" id="helixTurnsVal">3</span></div>
+          <input type="range" id="helixTurnsSlider" min="1" max="10" step="1" value="3">
+        </div>
+        <div class="slider-row">
+          <div class="top"><span>pitch (rise per turn)</span><span class="val" id="helixPitchVal">3.0 m</span></div>
+          <input type="range" id="helixPitchSlider" min="0.5" max="8" step="0.1" value="3">
+          <div style="font-size:0.72rem; color:var(--muted); margin-top:2px;" id="helixTotalRiseNote"></div>
+        </div>
       </div>
       <div class="slider-row">
         <div class="top"><span>resolution (slices)</span><span class="val" id="resVal">48</span></div>
@@ -355,7 +450,7 @@ v1.0.0 - 2026-07-17 - Initial build. Twist operation on four cross-section prese
         <div class="switch on" data-toggle="slicerings"></div>
       </div>
       <div class="toggle-row">
-        <span>Floor lines (per floor)</span>
+        <span id="floorLinesLabel">Floor lines (per floor)</span>
         <div class="switch on" data-toggle="floorlines"></div>
       </div>
       <div class="toggle-row">
@@ -390,7 +485,7 @@ v1.0.0 - 2026-07-17 - Initial build. Twist operation on four cross-section prese
 <script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
 <script src="https://cdn.jsdelivr.net/npm/three@0.128.0/examples/js/controls/OrbitControls.js"></script>
 <script>
-const APP_VERSION = '1.5.0';
+const APP_VERSION = '1.7.0';
 
 // ---------- toast ----------
 let toastTimer=null;
@@ -433,7 +528,7 @@ document.getElementById('footVersion').innerHTML =
 
 // ---------- state ----------
 const state = {
-  mode: 'twist',          // 'twist' | 'taper' | 'shear' | 'bend'
+  mode: 'twist',          // 'twist' | 'taper' | 'shear' | 'bend' | 'ffd' | 'helix'
   preset: 'square',
   alphaMax: 120,
   taperV: 0.5,             // x-direction scale factor at top plane T (book notation v)
@@ -441,6 +536,20 @@ const state = {
   shearDXM: 3.0,           // x-offset of axis A1 at top plane, always stored in meters
   shearDYM: 1.0,           // y-offset of axis A1 at top plane, always stored in meters
   bendBetaMax: 180,        // total bend angle in degrees; axis A maps to an arc A1 of this sweep
+  // FFD: 8 control points, indexed iu*4+iv*2+iw (iu,iv,iw in {0,1}), stored as offsets from their
+  // default position (the corner of the current bounding box) so they track preset/height changes
+  // sensibly instead of going stale as absolute coordinates.
+  ffdOffsets: [0,0,0,0,0,0,0,0].map(()=>({dx:0, dy:0, dz:0})),
+  // Helix: a generator/meridian curve (radial X(v), height-offset Y(v)) swept by true helical motion.
+  // Height here is turns × pitch, not floors × floor-height, so these live alongside but independent
+  // of the floors/floorHeightM fields above (which twist/taper/shear/bend/ffd keep using).
+  helixGenerator: 'line', // 'line' (common helicoid / ramp) | 'circle' (tube swept in meridian plane)
+  helixTurns: 3,
+  helixPitchM: 3.0,        // rise per full revolution, always stored in meters
+  helixRInnerM: 0.3,       // 'line' generator: inner radius (central void at the axis)
+  helixROuterM: 2.2,       // 'line' generator: outer radius
+  helixTubeRM: 0.25,       // 'circle' generator: tube radius
+  helixTubeOffsetM: 1.5,   // 'circle' generator: distance from axis to tube center
   units: 'metric',       // 'metric' | 'imperial' — display only; geometry is always stored in meters
   floors: 8,
   floorHeightM: 3.5,     // floor-to-floor height, always stored in meters regardless of display units
@@ -497,7 +606,62 @@ function rotate2D(p, rad){
   return [ p[0]*c - p[1]*s, p[0]*s + p[1]*c ];
 }
 
-// Maps a base-plane profile point to its full 3D position at parameter y, for any of the four
+// FFD control point helpers. Control points are indexed iu*4+iv*2+iw (iu,iv,iw in {0,1}), matching
+// the book's b_ijk convention. The default (identity) control point is the corresponding corner of
+// the current bounding box; a trilinear blend of a box's own corners, evaluated at that same point's
+// own normalized (u,v,w), reproduces the point exactly — so undragged FFD is a no-op, algebraically.
+function ffdDefaultCP(box, h, iu, iv, iw){
+  return [
+    box.minX + iu*(box.maxX - box.minX),
+    iv * h,
+    box.minZ + iw*(box.maxZ - box.minZ)
+  ];
+}
+function ffdControlPoints(box, h, offsets){
+  const cps = [];
+  for(let iu=0; iu<2; iu++) for(let iv=0; iv<2; iv++) for(let iw=0; iw<2; iw++){
+    const idx = iu*4 + iv*2 + iw;
+    const d = ffdDefaultCP(box, h, iu, iv, iw);
+    const o = offsets[idx];
+    cps[idx] = [ d[0]+o.dx, d[1]+o.dy, d[2]+o.dz ];
+  }
+  return cps;
+}
+function trilinearBlend(u, v, w, cps){
+  let x=0, y=0, z=0;
+  for(let iu=0; iu<2; iu++) for(let iv=0; iv<2; iv++) for(let iw=0; iw<2; iw++){
+    const bu = iu ? u : 1-u, bv = iv ? v : 1-v, bw = iw ? w : 1-w;
+    const b = bu*bv*bw;
+    const cp = cps[iu*4 + iv*2 + iw];
+    x += b*cp[0]; y += b*cp[1]; z += b*cp[2];
+  }
+  return [x, y, z];
+}
+
+// Helix generator/meridian curves. A generator lives in the (radial, height-offset) half-plane at
+// u=0 — i.e. m(v) = (X(v), 0, Y(v)) in the book's notation with the helical axis playing the role of
+// the book's z-axis (renamed here to this app's vertical y). 'line' is the common/right helicoid
+// (Fig. 9.56-9.57): a straight segment orthogonal to the axis, from an inner radius (optionally >0,
+// leaving a central void) to an outer radius — the classic open spiral ramp/stair surface. 'circle' is
+// a circle lying entirely IN the meridian plane (Fig. 9.55, middle): using the book's simplified
+// formula directly reproduces a winding tube/screw-column, with no Frenet-frame machinery needed since
+// the whole circle already sits flat in the plane the formula assumes. (The book's third variant —
+// Fig. 9.55 bottom, a circle held orthogonal to the helix's own tangent, the "true" constant-radius
+// pipe — needs a moving Frenet frame along the 3D helix and isn't implemented here; see reference text.)
+const HELIX_GENERATORS = {
+  line: (p) => [ [p.rInner, 0], [p.rOuter, 0] ],
+  circle: (p) => {
+    const pts = [], n = 24;
+    for(let i=0;i<n;i++){
+      const a = i*2*Math.PI/n;
+      pts.push([ p.tubeOffset + p.tubeR*Math.cos(a), p.tubeR*Math.sin(a) ]);
+    }
+    return pts;
+  }
+};
+const HELIX_GENERATOR_CLOSED = { line:false, circle:true };
+
+// Maps a base-plane profile point to its full 3D position at parameter y, for any of the five
 // operations. Twist rotates each slice by α(z) = (z/h)·α_max; taper scales each slice independently
 // in x (factor v(z)) and y (factor w(z)), both linear between 1 at the base and v/w at the top;
 // shear translates each slice within its own plane, linear between (0,0) at the base and (Δx,Δy) at
@@ -508,7 +672,9 @@ function rotate2D(p, rad){
 // with the profile's local x passed straight through (Fig. 13.15's "x-parallel lines stay
 // x-parallel") and local z (here playing the book's radial-offset "y") riding the arc's normal.
 // For a fixed y this in-slice map is a pure rotation+translation (an isometry — same area, exactly
-// like twist), which is what makes bending volume-preserving too.
+// like twist), which is what makes bending volume-preserving too. FFD is different in kind, not
+// degree: instead of a per-height formula it's a single trilinear (1,1,1) Bézier blend of 8 control
+// points spanning the whole solid's bounding box — no axis, no base plane, matching Fig. 13.19-13.20.
 function computeLayerPoint(mode, params, y, h, p){
   if(mode === 'taper'){
     const vFac = 1 + (y/h) * (params.V - 1);
@@ -527,6 +693,24 @@ function computeLayerPoint(mode, params, y, h, p){
     const worldZ = R*(1 - Math.cos(theta)) + p[1]*Math.cos(theta);
     return [ p[0], worldY, worldZ ];
   }
+  if(mode === 'ffd'){
+    const box = params.box;
+    const u = (p[0]-box.minX) / (box.maxX-box.minX || 1);
+    const v = y / h;
+    const w = (p[1]-box.minZ) / (box.maxZ-box.minZ || 1);
+    return trilinearBlend(u, v, w, params.cps);
+  }
+  if(mode === 'helix'){
+    // p = [X(v), Y(v)] — a generator point's radial distance and height-offset. u sweeps through
+    // params.totalAngle (turns × 2π) as y goes 0→h, matching the book's x=X(v)cosu, z=X(v)sinu,
+    // y=Y(v)+p·u (p here is riseParRad, rise per radian — pitch/2π — so a full turn (u+=2π) adds
+    // exactly one pitch of height, same as the book's z1=z+p·u with p in per-radian terms).
+    const uAngle = (y/h) * params.totalAngle;
+    const worldX = p[0]*Math.cos(uAngle);
+    const worldZ = p[0]*Math.sin(uAngle);
+    const worldY = p[1] + params.riseParRad*uAngle;
+    return [worldX, worldY, worldZ];
+  }
   const angleDeg = (y/h) * params.alphaMax;
   const [x,z] = rotate2D(p, angleDeg * Math.PI/180);
   return [x, y, z];
@@ -538,19 +722,63 @@ function unitLabels(){ return state.units==='metric' ? {len:'m', area:'m²', vol
 function toDisplayLen(m){ return state.units==='metric' ? m : m*M_TO_FT; }
 function toDisplayArea(m2){ return state.units==='metric' ? m2 : m2*M_TO_FT*M_TO_FT; }
 function toDisplayVol(m3){ return state.units==='metric' ? m3 : m3*M_TO_FT*M_TO_FT*M_TO_FT; }
-function totalHeightM(){ return state.floors * state.floorHeightM; }
+function totalHeightM(){
+  return state.mode === 'helix' ? state.helixTurns * state.helixPitchM : state.floors * state.floorHeightM;
+}
 
 // Twist, shear, and bend never change a slice's area — rotation, translation, and (per-slice, at
 // fixed height) rotation+translation again are all exact isometries of the plane — so deformed
 // volume == prism volume exactly, by Cavalieri. Taper scales each slice's area by v(z)*w(z), a
 // quadratic in z, so the volume ratio has a closed form:
 // baseArea * h * [1 + (V+W-2)/2 + (V-1)(W-1)/3] (integral of v(z)w(z) dz worked out by hand).
+// FFD has no such closed form — an arbitrary trilinear warp can do anything to volume — so its
+// reading comes from computeMeshVolume() on the actual built geometry instead (see rebuild()).
 function computeDeformedVolume(mode, params, baseArea, h){
   if(mode === 'taper'){
     const V = params.V, W = params.W;
     return baseArea * h * (1 + (V + W - 2)/2 + (V - 1)*(W - 1)/3);
   }
   return baseArea * h;
+}
+
+// Numeric volume of a closed triangle mesh via the divergence theorem (sum of signed tetrahedron
+// volumes from the origin) — used only where no closed form exists (FFD). Accepts any number of
+// THREE.BufferGeometry pieces (side + caps) and sums across all of them.
+function computeMeshVolume(...geometries){
+  let vol = 0;
+  for(const geo of geometries){
+    const pos = geo.attributes.position.array;
+    const idx = geo.index.array;
+    for(let i=0; i<idx.length; i+=3){
+      const a=idx[i]*3, b=idx[i+1]*3, c=idx[i+2]*3;
+      const ax=pos[a], ay=pos[a+1], az=pos[a+2];
+      const bx=pos[b], by=pos[b+1], bz=pos[b+2];
+      const cx=pos[c], cy=pos[c+1], cz=pos[c+2];
+      vol += (ax*(by*cz - cy*bz) - ay*(bx*cz - cx*bz) + az*(bx*cy - cx*by)) / 6;
+    }
+  }
+  return Math.abs(vol);
+}
+
+// Numeric surface area of a mesh — sum of triangle areas via the cross-product formula. Used for
+// Helix's HUD reading: a helicoid isn't a solid (the common helicoid has a hole around the axis and
+// zero thickness), so there's no volume to report — area is the honest analog, and like FFD's volume,
+// there's no closed form for it here either, so it's measured from the actual built triangles.
+function computeMeshSurfaceArea(...geometries){
+  let area = 0;
+  for(const geo of geometries){
+    if(!geo) continue;
+    const pos = geo.attributes.position.array;
+    const idx = geo.index.array;
+    for(let i=0; i<idx.length; i+=3){
+      const a=idx[i]*3, b=idx[i+1]*3, c=idx[i+2]*3;
+      const ux=pos[b]-pos[a], uy=pos[b+1]-pos[a+1], uz=pos[b+2]-pos[a+2];
+      const vx=pos[c]-pos[a], vy=pos[c+1]-pos[a+1], vz=pos[c+2]-pos[a+2];
+      const cx=uy*vz-uz*vy, cy=uz*vx-ux*vz, cz=ux*vy-uy*vx;
+      area += 0.5*Math.sqrt(cx*cx+cy*cy+cz*cz);
+    }
+  }
+  return area;
 }
 
 // ---------- three.js setup ----------
@@ -660,11 +888,78 @@ function buildDeformedGeometry(profile, height, segs, mode, params){
   return { sideGeo, bottomCap, topCap, layerPositions: positions, segs, n };
 }
 
+// Sweeps a generator curve through true helical motion instead of extruding-then-deforming a
+// cross-section — a different construction from buildDeformedGeometry, not a variant of it (see
+// changelog v1.7.0). Returns the same {layerPositions, segs, n} shape buildDeformedGeometry does,
+// so ruling lines, slice rings, and point labels all work unmodified on either builder's output —
+// only the caps differ: an open generator (line) has no cap (its "ends" are edges, not faces); a
+// closed generator (circle) gets fan-triangulated disk caps at both open ends of the tube.
+function buildHelicalGeometry(genPts, closed, uSegs, height, params){
+  const n = genPts.length;
+  const positions = [];
+  const indices = [];
+  for(let j=0; j<=uSegs; j++){
+    const y = (j/uSegs) * height;
+    for(let i=0;i<n;i++){
+      const [x,yOut,z] = computeLayerPoint('helix', params, y, height, genPts[i]);
+      positions.push(x, yOut, z);
+    }
+  }
+  function distSq(ia, ib){
+    const ax=positions[ia*3], ay=positions[ia*3+1], az=positions[ia*3+2];
+    const bx=positions[ib*3], by=positions[ib*3+1], bz=positions[ib*3+2];
+    const dx=ax-bx, dy=ay-by, dz=az-bz;
+    return dx*dx+dy*dy+dz*dz;
+  }
+  const edgeCount = closed ? n : n-1;
+  for(let j=0;j<uSegs;j++){
+    for(let i=0;i<edgeCount;i++){
+      const iNext = closed ? (i+1)%n : i+1;
+      const a = j*n+i, b = j*n+iNext, c = (j+1)*n+iNext, d = (j+1)*n+i;
+      if(distSq(a,c) <= distSq(b,d)){ indices.push(a,b,c, a,c,d); }
+      else { indices.push(a,b,d, b,c,d); }
+    }
+  }
+  const sideGeo = new THREE.BufferGeometry();
+  sideGeo.setAttribute('position', new THREE.Float32BufferAttribute(positions, 3));
+  sideGeo.setIndex(indices);
+  sideGeo.computeVertexNormals();
+
+  let capA = null, capB = null;
+  if(closed){
+    function buildDiskCap(y, flip){
+      const capPos = [];
+      genPts.forEach(p=>{ const [x,yOut,z] = computeLayerPoint('helix', params, y, height, p); capPos.push(x,yOut,z); });
+      let cx=0, cy=0, cz=0;
+      for(let i=0;i<n;i++){ cx+=capPos[i*3]; cy+=capPos[i*3+1]; cz+=capPos[i*3+2]; }
+      cx/=n; cy/=n; cz/=n;
+      capPos.push(cx, cy, cz);
+      const centerIdx = n;
+      const capIdx = [];
+      for(let i=0;i<n;i++){
+        const a=i, b=(i+1)%n;
+        if(flip) capIdx.push(centerIdx, b, a); else capIdx.push(centerIdx, a, b);
+      }
+      const g = new THREE.BufferGeometry();
+      g.setAttribute('position', new THREE.Float32BufferAttribute(capPos, 3));
+      g.setIndex(capIdx);
+      g.computeVertexNormals();
+      return g;
+    }
+    capA = buildDiskCap(0, true);
+    capB = buildDiskCap(height, false);
+  }
+  return { sideGeo, capA, capB, layerPositions: positions, segs: uSegs, n };
+}
+
 let currentMesh = null;
 let rulingLines = null;
 let axisHelper = null;
 let planeHelper = null;
 let labelSprites = [];
+let ffdHandleMeshes = []; // current draggable FFD handle meshes, rebuilt every rebuild() call —
+                           // pointer handlers (wired once, outside rebuild) raycast against this
+                           // live array so they always hit whatever's currently in the scene.
 
 function spriteLabel(text, color){
   const cnv = document.createElement('canvas');
@@ -688,14 +983,43 @@ function rebuild(){
   labelSprites = [];
 
   const h = totalHeightM();
-  const profile = PROFILES[state.preset]();
-  const params = state.mode === 'taper' ? { V: state.taperV, W: state.taperW }
-    : state.mode === 'shear' ? { DX: state.shearDXM, DY: state.shearDYM }
-    : state.mode === 'bend' ? { betaMax: state.bendBetaMax }
-    : { alphaMax: state.alphaMax };
-  const { sideGeo, bottomCap, topCap, layerPositions, segs, n } = buildDeformedGeometry(
-    profile, h, state.segments, state.mode, params
-  );
+  let profile, box, params, sideGeo, bottomCap, topCap, layerPositions, segs, n;
+  let helixCapA = null, helixCapB = null, helixROuterC = null;
+
+  if(state.mode === 'helix'){
+    // Helix sweeps a generator curve by true helical motion instead of extruding+deforming a
+    // cross-section — a different builder entirely (see buildHelicalGeometry / changelog v1.7.0).
+    helixROuterC = Math.max(state.helixROuterM, state.helixRInnerM + 0.1); // keep a visible gap
+    params = {
+      totalAngle: state.helixTurns * 2*Math.PI,
+      riseParRad: state.helixPitchM / (2*Math.PI)
+    };
+    const genParams = {
+      rInner: state.helixRInnerM, rOuter: helixROuterC,
+      tubeOffset: state.helixTubeOffsetM, tubeR: state.helixTubeRM
+    };
+    profile = HELIX_GENERATORS[state.helixGenerator](genParams);
+    const closed = HELIX_GENERATOR_CLOSED[state.helixGenerator];
+    const uSegs = Math.min(state.helixTurns * state.segments, 800); // sane cap on triangle count
+    const built = buildHelicalGeometry(profile, closed, uSegs, h, params);
+    sideGeo = built.sideGeo; helixCapA = built.capA; helixCapB = built.capB;
+    layerPositions = built.layerPositions; segs = built.segs; n = built.n;
+    box = null;
+  } else {
+    profile = PROFILES[state.preset]();
+    box = {
+      minX: Math.min(...profile.map(p=>p[0])), maxX: Math.max(...profile.map(p=>p[0])),
+      minZ: Math.min(...profile.map(p=>p[1])), maxZ: Math.max(...profile.map(p=>p[1]))
+    };
+    params = state.mode === 'taper' ? { V: state.taperV, W: state.taperW }
+      : state.mode === 'shear' ? { DX: state.shearDXM, DY: state.shearDYM }
+      : state.mode === 'bend' ? { betaMax: state.bendBetaMax }
+      : state.mode === 'ffd' ? { box, cps: ffdControlPoints(box, h, state.ffdOffsets) }
+      : { alphaMax: state.alphaMax };
+    ({ sideGeo, bottomCap, topCap, layerPositions, segs, n } = buildDeformedGeometry(
+      profile, h, state.segments, state.mode, params
+    ));
+  }
 
   const material = new THREE.MeshStandardMaterial({
     color: 0x7d92a0, metalness:0.05, roughness:0.65,
@@ -707,9 +1031,14 @@ function rebuild(){
   });
 
   const sideMesh = new THREE.Mesh(sideGeo, material);
-  const bottomMesh = new THREE.Mesh(bottomCap, capMaterial);
-  const topMesh = new THREE.Mesh(topCap, capMaterial);
-  solidGroup.add(sideMesh, bottomMesh, topMesh);
+  solidGroup.add(sideMesh);
+  if(state.mode === 'helix'){
+    // 'line' generator (open ribbon) has no caps by design — its ends are edges, not faces
+    if(helixCapA) solidGroup.add(new THREE.Mesh(helixCapA, capMaterial));
+    if(helixCapB) solidGroup.add(new THREE.Mesh(helixCapB, capMaterial));
+  } else {
+    solidGroup.add(new THREE.Mesh(bottomCap, capMaterial), new THREE.Mesh(topCap, capMaterial));
+  }
 
   // ruling lines: connect each profile point's column across all layers (helix l_i)
   if(state.overlays.rulings){
@@ -746,11 +1075,16 @@ function rebuild(){
   }
 
   // floor lines: a ring at every real floor-to-floor height, independent of the computational
-  // resolution above — this is the "how many actual stories is this" readout
+  // resolution above — this is the "how many actual stories is this" readout. In Helix mode there
+  // are no floors, so this same toggle/overlay is reused as "turn lines" instead: a ring (or, for
+  // the open 'line' generator, a radial spoke) at every full revolution — y=k·pitch lands exactly
+  // on u=k·2π since h=turns·pitch and totalAngle=turns·2π, so the same per-k evaluation works.
   if(state.overlays.floorlines){
     const floorMat = new THREE.LineBasicMaterial({ color: 0x2a241c, transparent:true, opacity:0.4 });
-    for(let k=0; k<=state.floors; k++){
-      const y = k * state.floorHeightM;
+    const loopCount = state.mode === 'helix' ? state.helixTurns : state.floors;
+    const stepM = state.mode === 'helix' ? state.helixPitchM : state.floorHeightM;
+    for(let k=0; k<=loopCount; k++){
+      const y = k * stepM;
       const pts = [];
       profile.forEach(p=>{ const [x,yOut,z] = computeLayerPoint(state.mode, params, y, h, p); pts.push(new THREE.Vector3(x, yOut, z)); });
       pts.push(pts[0].clone());
@@ -763,7 +1097,7 @@ function rebuild(){
   // get a shared "moved axis" rendering: the original A stays as a faint dashed reference, A1
   // (solid, brick) shows where it actually went — a straight line for shear, a sampled curve for
   // bend's circular arc. Twist and taper fix the axis, so they just get the single solid line.
-  if(state.overlays.axis){
+  if(state.overlays.axis && state.mode !== 'ffd'){
     const axisTop = h * 1.35;
     if(state.mode === 'shear' || state.mode === 'bend'){
       const aGeo = new THREE.BufferGeometry().setFromPoints([
@@ -828,13 +1162,16 @@ function rebuild(){
     overlayGroup.add(edges);
   }
 
-  // point labels a,b,c (bottom) -> a1,b1,c1 (top), first up-to-3 profile verts
+  // point labels a,b,c (bottom) -> a1,b1,c1 (top), first up-to-3 profile verts. For helix, "bp" is
+  // a generator point [X(v), Y(v)] (radial, height-offset) rather than an [x,z] footprint point, so
+  // its bottom anchor sits at u=0 (x=X(v), z≈0) instead of the other modes' fixed-height-plan layout.
   if(state.overlays.labels){
     const names = ['a','b','c','d','e','f','g','h','i','j'];
     for(let i=0;i<Math.min(n, names.length); i++){
       const bp = profile[i];
       const bLabel = spriteLabel(names[i], '#1a1a18');
-      bLabel.position.set(bp[0]*1.12, 0.25, bp[1]*1.12);
+      if(state.mode === 'helix') bLabel.position.set(bp[0]*1.06, bp[1]+0.25, 0.12);
+      else bLabel.position.set(bp[0]*1.12, 0.25, bp[1]*1.12);
       overlayGroup.add(bLabel);
 
       const [tx,tyOut,tz] = computeLayerPoint(state.mode, params, h, h, profile[i]);
@@ -844,46 +1181,118 @@ function rebuild(){
     }
   }
 
-  // HUD numbers — unit-aware and mode-aware
-  const u = unitLabels();
-  const baseArea = polygonArea(profile);
-  const volDeformed = computeDeformedVolume(state.mode, params, baseArea, h);
-  const volPrism = baseArea * h;
+  // FFD control lattice + draggable handles — always shown in this mode since dragging them IS
+  // the interaction, not an optional decoration like the other overlays.
+  ffdHandleMeshes = [];
+  if(state.mode === 'ffd'){
+    const handleR = Math.max(h*0.02, 0.15);
+    const cageMat = new THREE.LineBasicMaterial({ color: 0x9c3226, transparent:true, opacity:0.55 });
+    const cagePts = [];
+    // 12 edges of the control cuboid, connecting adjacent corners (differ in exactly one index)
+    for(let iu=0; iu<2; iu++) for(let iv=0; iv<2; iv++) for(let iw=0; iw<2; iw++){
+      const here = params.cps[iu*4+iv*2+iw];
+      if(iu===0){ const there=params.cps[1*4+iv*2+iw]; cagePts.push(new THREE.Vector3(...here), new THREE.Vector3(...there)); }
+      if(iv===0){ const there=params.cps[iu*4+1*2+iw]; cagePts.push(new THREE.Vector3(...here), new THREE.Vector3(...there)); }
+      if(iw===0){ const there=params.cps[iu*4+iv*2+1]; cagePts.push(new THREE.Vector3(...here), new THREE.Vector3(...there)); }
+    }
+    const cageGeo = new THREE.BufferGeometry().setFromPoints(cagePts);
+    overlayGroup.add(new THREE.LineSegments(cageGeo, cageMat));
 
-  if(state.mode === 'taper'){
-    document.getElementById('hudParam1Label').textContent = 'v (x-scale @ top)';
-    document.getElementById('hudParam1').textContent = state.taperV.toFixed(2);
-    document.getElementById('hudParam2Label').textContent = 'w (y-scale @ top)';
-    document.getElementById('hudParam2').textContent = state.taperW.toFixed(2);
-  } else if(state.mode === 'shear'){
-    document.getElementById('hudParam1Label').textContent = 'Δx @ top';
-    document.getElementById('hudParam1').textContent = toDisplayLen(state.shearDXM).toFixed(1) + ' ' + u.len;
-    document.getElementById('hudParam2Label').textContent = 'Δy @ top';
-    document.getElementById('hudParam2').textContent = toDisplayLen(state.shearDYM).toFixed(1) + ' ' + u.len;
-  } else if(state.mode === 'bend'){
-    const betaRad = state.bendBetaMax * Math.PI/180;
-    const R = Math.abs(betaRad) < 1e-6 ? Infinity : h/betaRad;
-    document.getElementById('hudParam1Label').textContent = 'β_max';
-    document.getElementById('hudParam1').textContent = state.bendBetaMax.toFixed(0) + '°';
-    document.getElementById('hudParam2Label').textContent = 'radius R (h/β)';
-    document.getElementById('hudParam2').textContent = Number.isFinite(R) ? toDisplayLen(Math.abs(R)).toFixed(1) + ' ' + u.len : '∞ (straight)';
-  } else {
-    document.getElementById('hudParam1Label').textContent = 'α_max';
-    document.getElementById('hudParam1').textContent = state.alphaMax.toFixed(0) + '°';
-    document.getElementById('hudParam2Label').textContent = 'α at h/2';
-    document.getElementById('hudParam2').textContent = (state.alphaMax/2).toFixed(1) + '°';
+    for(let idx=0; idx<8; idx++){
+      const cp = params.cps[idx];
+      const handle = new THREE.Mesh(
+        new THREE.SphereGeometry(handleR, 16, 12),
+        new THREE.MeshStandardMaterial({ color: 0x9c3226, metalness:0.1, roughness:0.5 })
+      );
+      handle.position.set(cp[0], cp[1], cp[2]);
+      handle.userData.ffdIndex = idx;
+      overlayGroup.add(handle);
+      ffdHandleMeshes.push(handle);
+    }
   }
-  document.getElementById('hudHeight').textContent = toDisplayLen(h).toFixed(1) + ' ' + u.len;
-  document.getElementById('hudArea').textContent = toDisplayArea(baseArea).toFixed(2) + ' ' + u.area;
-  document.getElementById('hudVolTwist').textContent = toDisplayVol(volDeformed).toFixed(2) + ' ' + u.vol;
-  document.getElementById('hudVolStraight').textContent = toDisplayVol(volPrism).toFixed(2) + ' ' + u.vol;
 
-  const matchEl = document.getElementById('hudMatch');
-  const ratio = volPrism > 0 ? volDeformed / volPrism : 1;
-  if(Math.abs(ratio - 1) < 0.001){
-    matchEl.textContent = 'volumes match — Cavalieri holds';
+  // HUD numbers — unit-aware and mode-aware. Helix branches out entirely here: it isn't a solid (the
+  // common helicoid has a hole around the axis and zero thickness), so there's no volume to report —
+  // the volume rows are repurposed to surface area (measured, like FFD's volume, since no closed form
+  // exists for an arbitrary helical sweep either) and generator length, and the Cavalieri-style match
+  // row is repurposed to name which book figure/surface is currently showing.
+  const u = unitLabels();
+
+  if(state.mode === 'helix'){
+    document.getElementById('hudParam1Label').textContent = 'turns';
+    document.getElementById('hudParam1').textContent = state.helixTurns;
+    document.getElementById('hudParam2Label').textContent = 'pitch (rise/turn)';
+    document.getElementById('hudParam2').textContent = toDisplayLen(state.helixPitchM).toFixed(1) + ' ' + u.len;
+    document.getElementById('hudHeight').textContent = toDisplayLen(h).toFixed(1) + ' ' + u.len;
+
+    const genLen = state.helixGenerator === 'line'
+      ? (helixROuterC - state.helixRInnerM)
+      : (2*Math.PI*state.helixTubeRM);
+    document.getElementById('hudAreaLabel').textContent = 'generator length';
+    document.getElementById('hudArea').textContent = toDisplayLen(genLen).toFixed(2) + ' ' + u.len;
+
+    const surfaceArea = computeMeshSurfaceArea(sideGeo, helixCapA, helixCapB);
+    document.getElementById('hudVolTwistLabel').textContent = 'surface area';
+    document.getElementById('hudVolTwist').textContent = toDisplayArea(surfaceArea).toFixed(2) + ' ' + u.area;
+    document.getElementById('hudVolStraightLabel').textContent = 'generator';
+    document.getElementById('hudVolStraight').textContent = state.helixGenerator === 'line' ? 'line (ramp)' : 'circle (tube)';
+
+    const matchEl = document.getElementById('hudMatch');
+    matchEl.textContent = state.helixGenerator === 'line'
+      ? 'common helicoid — open ruled surface, Fig. 9.56 (no volume to preserve)'
+      : 'circle swept in the meridian plane — winding tube, Fig. 9.55';
   } else {
-    matchEl.textContent = `deformed volume is ${(ratio*100).toFixed(0)}% of the prism — this operation doesn't preserve volume`;
+    document.getElementById('hudAreaLabel').textContent = 'base area';
+    document.getElementById('hudVolTwistLabel').textContent = 'deformed volume';
+    document.getElementById('hudVolStraightLabel').textContent = 'prism volume';
+
+    const baseArea = polygonArea(profile);
+    const volDeformed = state.mode === 'ffd'
+      ? computeMeshVolume(sideGeo, bottomCap, topCap)
+      : computeDeformedVolume(state.mode, params, baseArea, h);
+    const volPrism = baseArea * h;
+
+    if(state.mode === 'taper'){
+      document.getElementById('hudParam1Label').textContent = 'v (x-scale @ top)';
+      document.getElementById('hudParam1').textContent = state.taperV.toFixed(2);
+      document.getElementById('hudParam2Label').textContent = 'w (y-scale @ top)';
+      document.getElementById('hudParam2').textContent = state.taperW.toFixed(2);
+    } else if(state.mode === 'shear'){
+      document.getElementById('hudParam1Label').textContent = 'Δx @ top';
+      document.getElementById('hudParam1').textContent = toDisplayLen(state.shearDXM).toFixed(1) + ' ' + u.len;
+      document.getElementById('hudParam2Label').textContent = 'Δy @ top';
+      document.getElementById('hudParam2').textContent = toDisplayLen(state.shearDYM).toFixed(1) + ' ' + u.len;
+    } else if(state.mode === 'bend'){
+      const betaRad = state.bendBetaMax * Math.PI/180;
+      const R = Math.abs(betaRad) < 1e-6 ? Infinity : h/betaRad;
+      document.getElementById('hudParam1Label').textContent = 'β_max';
+      document.getElementById('hudParam1').textContent = state.bendBetaMax.toFixed(0) + '°';
+      document.getElementById('hudParam2Label').textContent = 'radius R (h/β)';
+      document.getElementById('hudParam2').textContent = Number.isFinite(R) ? toDisplayLen(Math.abs(R)).toFixed(1) + ' ' + u.len : '∞ (straight)';
+    } else if(state.mode === 'ffd'){
+      const maxOffset = Math.max(0, ...state.ffdOffsets.map(o=>Math.hypot(o.dx,o.dy,o.dz)));
+      document.getElementById('hudParam1Label').textContent = 'degree';
+      document.getElementById('hudParam1').textContent = '(1,1,1) trilinear';
+      document.getElementById('hudParam2Label').textContent = 'max handle offset';
+      document.getElementById('hudParam2').textContent = toDisplayLen(maxOffset).toFixed(1) + ' ' + u.len;
+    } else {
+      document.getElementById('hudParam1Label').textContent = 'α_max';
+      document.getElementById('hudParam1').textContent = state.alphaMax.toFixed(0) + '°';
+      document.getElementById('hudParam2Label').textContent = 'α at h/2';
+      document.getElementById('hudParam2').textContent = (state.alphaMax/2).toFixed(1) + '°';
+    }
+    document.getElementById('hudHeight').textContent = toDisplayLen(h).toFixed(1) + ' ' + u.len;
+    document.getElementById('hudArea').textContent = toDisplayArea(baseArea).toFixed(2) + ' ' + u.area;
+    document.getElementById('hudVolTwist').textContent = toDisplayVol(volDeformed).toFixed(2) + ' ' + u.vol;
+    document.getElementById('hudVolStraight').textContent = toDisplayVol(volPrism).toFixed(2) + ' ' + u.vol;
+
+    const matchEl = document.getElementById('hudMatch');
+    const ratio = volPrism > 0 ? volDeformed / volPrism : 1;
+    if(Math.abs(ratio - 1) < 0.001){
+      matchEl.textContent = 'volumes match — Cavalieri holds';
+    } else {
+      matchEl.textContent = `deformed volume is ${(ratio*100).toFixed(0)}% of the prism — this operation doesn't preserve volume`;
+    }
   }
 
   controls.target.set(0, h/2, 0);
@@ -893,9 +1302,14 @@ function rebuild(){
     ? `Shear Δx${toDisplayLen(state.shearDXM).toFixed(1)}${u.len} Δy${toDisplayLen(state.shearDYM).toFixed(1)}${u.len}`
     : state.mode === 'bend'
     ? `Bend β_max ${state.bendBetaMax}°`
+    : state.mode === 'ffd'
+    ? `Free (1,1,1) FFD`
+    : state.mode === 'helix'
+    ? `Helix ${state.helixGenerator} ${state.helixTurns}× p${toDisplayLen(state.helixPitchM).toFixed(1)}${u.len}`
     : `Twist α_max ${state.alphaMax}°`;
-  document.getElementById('footRight').textContent =
-    `${PRESET_LABELS[state.preset]} · ${paramSummary} · ${state.floors} floors · h ${toDisplayLen(h).toFixed(1)}${u.len} · ${state.segments} slices`;
+  document.getElementById('footRight').textContent = state.mode === 'helix'
+    ? `${state.helixGenerator === 'line' ? 'Line generator' : 'Circle generator'} · ${paramSummary} · ${state.helixTurns} turns · h ${toDisplayLen(h).toFixed(1)}${u.len} · ${segs} segments`
+    : `${PRESET_LABELS[state.preset]} · ${paramSummary} · ${state.floors} floors · h ${toDisplayLen(h).toFixed(1)}${u.len} · ${state.segments} slices`;
 }
 
 // ---------- UI wiring ----------
@@ -924,12 +1338,19 @@ const bendBetaSlider = document.getElementById('bendBetaSlider');
 const floorsSlider = document.getElementById('floorsSlider');
 const floorHeightSlider = document.getElementById('floorHeightSlider');
 const resSlider = document.getElementById('resSlider');
+const helixTurnsSlider = document.getElementById('helixTurnsSlider');
+const helixPitchSlider = document.getElementById('helixPitchSlider');
+const helixRInnerSlider = document.getElementById('helixRInnerSlider');
+const helixROuterSlider = document.getElementById('helixROuterSlider');
+const helixTubeRSlider = document.getElementById('helixTubeRSlider');
+const helixTubeOffsetSlider = document.getElementById('helixTubeOffsetSlider');
 alphaSlider.value = state.alphaMax;
 taperVSlider.value = state.taperV;
 taperWSlider.value = state.taperW;
 bendBetaSlider.value = state.bendBetaMax;
 floorsSlider.value = state.floors;
 resSlider.value = state.segments;
+helixTurnsSlider.value = state.helixTurns;
 
 const REFERENCE_TEXT = {
   twist: `This is Fig. 13.3–13.6's twist operation: a fixed base plane B, a vertical axis A, and every
@@ -954,21 +1375,42 @@ const REFERENCE_TEXT = {
     profile's local x carried straight through (Fig. 13.15's "x-parallel lines stay x-parallel") —
     it's really a 2D bend in the yz-plane, extended along x. Because each slice only rotates and
     translates, never scales, bending is volume-preserving too. Try β_max = 180° for a full
-    U-shaped bend, or push toward 360° to watch it curl back on itself.`
+    U-shaped bend, or push toward 360° to watch it curl back on itself.`,
+  ffd: `This is Fig. 13.17–13.20's freeform deformation: unlike every other operation here, there's
+    no axis and no fixed base plane — the whole solid sits inside a cuboid with 8 control points at
+    its corners, and every point inside is a trilinear (1,1,1) Bézier blend of all 8. Drag any brick
+    handle in the viewport. Per Fig. 13.18, this looks linear but isn't: straight lines not parallel
+    to an edge become cubic curves, and it generally changes volume however it likes — there's no
+    Cavalieri argument here the way there was for twist, shear, and bend.`,
+  helix: `This is ch.9's helical surfaces (Fig. 9.53–9.60) — a different construction from the other
+    five, which all deform a solid. Here a generator curve is swept by true helical motion: rotate by
+    u about axis A while translating p·u along it (x=X(v)cosu, z=X(v)sinu, y=Y(v)+p·u). "Line" is the
+    common/right helicoid (Fig. 9.56–9.57): a straight segment orthogonal to A, the classic open
+    spiral ramp or staircase (Fig. 9.60's photo) — try a small inner radius for a central newel void.
+    "Circle" places a circle flat in the meridian plane (Fig. 9.55, middle): a winding tube or screw
+    column. The book's third variant — a circle held orthogonal to the helix's own tangent (Fig. 9.55,
+    bottom), the true constant-radius pipe — needs a moving Frenet frame along the 3D helix and isn't
+    modeled here. Because a helicoid isn't a solid (the common one has a hole around the axis and zero
+    thickness), there's no volume to report — the HUD shows surface area instead.`
 };
 const FORMULA_HTML = {
   twist: 'α(z) = (z/h)·α<sub>max</sub>',
   taper: 'v(z)=1+z(v−1)/h, w(z)=1+z(w−1)/h',
   shear: 'x₁=x+Δx·(z/h), y₁=y+Δy·(z/h)',
-  bend: 'R=h/β, θ(z)=β·(z/h)'
+  bend: 'R=h/β, θ(z)=β·(z/h)',
+  ffd: 'b(u,v,w) = Σ B<sub>i</sub>(u)B<sub>j</sub>(v)B<sub>k</sub>(w)·b<sub>ijk</sub>',
+  helix: 'x=X(v)cosu, z=X(v)sinu, y=Y(v)+p·u'
 };
 const HUD_FORMULA_HTML = {
   twist: 'α(z) = (z / h) · α<sub>max</sub>',
   taper: 'v(z) = 1 + z·(v−1)/h',
   shear: 'x₁ = x + Δx·(z/h)',
-  bend: 'θ(z) = β · (z/h), R = h/β'
+  bend: 'θ(z) = β · (z/h), R = h/β',
+  ffd: 'trilinear blend of 8 control points',
+  helix: 'helical sweep of generator m(v)'
 };
-const TAGLINES = { twist: 'twist deformation, live', taper: 'taper deformation, live', shear: 'shear deformation, live', bend: 'bend deformation, live' };
+const TAGLINES = { twist: 'twist deformation, live', taper: 'taper deformation, live', shear: 'shear deformation, live', bend: 'bend deformation, live', ffd: 'freeform deformation, live', helix: 'helical sweep, live' };
+const MODE_LABEL = { twist:'Twist', taper:'Taper', shear:'Shear', bend:'Bend', ffd:'Free', helix:'Helix' };
 
 const modeGrid = document.getElementById('modeGrid');
 function applyModeChrome(){
@@ -980,6 +1422,19 @@ function applyModeChrome(){
   document.getElementById('taperParamsBlock').style.display = state.mode === 'taper' ? '' : 'none';
   document.getElementById('shearParamsBlock').style.display = state.mode === 'shear' ? '' : 'none';
   document.getElementById('bendParamsBlock').style.display = state.mode === 'bend' ? '' : 'none';
+  document.getElementById('ffdParamsBlock').style.display = state.mode === 'ffd' ? '' : 'none';
+  document.getElementById('helixParamsBlock').style.display = state.mode === 'helix' ? '' : 'none';
+  // Helix has no cross-section footprint and no floors — swap those blocks for its own turns/pitch
+  // block, and reuse the "Floor lines" toggle's label text as "Turn lines" while in this mode.
+  document.getElementById('crossSectionSection').style.display = state.mode === 'helix' ? 'none' : '';
+  document.getElementById('commonHeightBlock').style.display = state.mode === 'helix' ? 'none' : '';
+  document.getElementById('helixHeightBlock').style.display = state.mode === 'helix' ? '' : 'none';
+  document.getElementById('floorLinesLabel').textContent = state.mode === 'helix' ? 'Turn lines (per revolution)' : 'Floor lines (per floor)';
+  if(state.mode === 'helix'){
+    document.getElementById('helixLineParams').style.display = state.helixGenerator === 'line' ? '' : 'none';
+    document.getElementById('helixCircleParams').style.display = state.helixGenerator === 'circle' ? '' : 'none';
+    [...document.getElementById('helixGenGrid').children].forEach(b=>b.classList.toggle('active', b.dataset.helixgen === state.helixGenerator));
+  }
   [...modeGrid.children].forEach(b=>b.classList.toggle('active', b.dataset.mode === state.mode));
 }
 [...modeGrid.children].forEach(btn=>{
@@ -987,10 +1442,20 @@ function applyModeChrome(){
     state.mode = btn.dataset.mode;
     applyModeChrome();
     persist(); rebuild();
-    toast(TAGLINES[state.mode].replace(' deformation, live','') + ' mode');
+    toast(MODE_LABEL[state.mode] + ' mode');
   });
 });
 applyModeChrome();
+
+const helixGenGrid = document.getElementById('helixGenGrid');
+[...helixGenGrid.children].forEach(btn=>{
+  btn.addEventListener('click', ()=>{
+    state.helixGenerator = btn.dataset.helixgen;
+    applyModeChrome();
+    persist(); rebuild();
+    toast((state.helixGenerator === 'line' ? 'Line' : 'Circle') + ' generator');
+  });
+});
 
 const unitsGrid = document.getElementById('unitsGrid');
 [...unitsGrid.children].forEach(btn=>{
@@ -1001,6 +1466,7 @@ const unitsGrid = document.getElementById('unitsGrid');
     btn.classList.add('active');
     syncFloorHeightSliderRange();
     syncShearSliderRange();
+    syncHelixSliderRanges();
     syncSliderLabels(); persist(); rebuild();
     toast(state.units === 'metric' ? 'Metric units' : 'Imperial units');
   });
@@ -1032,6 +1498,33 @@ function syncShearSliderRange(){
 }
 syncShearSliderRange();
 
+function syncHelixSliderRanges(){
+  if(state.units === 'metric'){
+    helixPitchSlider.min = 0.5; helixPitchSlider.max = 8; helixPitchSlider.step = 0.1;
+    helixRInnerSlider.min = 0; helixRInnerSlider.max = 3; helixRInnerSlider.step = 0.1;
+    helixROuterSlider.min = 0.5; helixROuterSlider.max = 6; helixROuterSlider.step = 0.1;
+    helixTubeRSlider.min = 0.05; helixTubeRSlider.max = 1; helixTubeRSlider.step = 0.01;
+    helixTubeOffsetSlider.min = 0; helixTubeOffsetSlider.max = 4; helixTubeOffsetSlider.step = 0.1;
+    helixPitchSlider.value = state.helixPitchM.toFixed(1);
+    helixRInnerSlider.value = state.helixRInnerM.toFixed(1);
+    helixROuterSlider.value = state.helixROuterM.toFixed(1);
+    helixTubeRSlider.value = state.helixTubeRM.toFixed(2);
+    helixTubeOffsetSlider.value = state.helixTubeOffsetM.toFixed(1);
+  } else {
+    helixPitchSlider.min = 1.5; helixPitchSlider.max = 26; helixPitchSlider.step = 0.5;
+    helixRInnerSlider.min = 0; helixRInnerSlider.max = 10; helixRInnerSlider.step = 0.5;
+    helixROuterSlider.min = 1.5; helixROuterSlider.max = 20; helixROuterSlider.step = 0.5;
+    helixTubeRSlider.min = 0.15; helixTubeRSlider.max = 3; helixTubeRSlider.step = 0.05;
+    helixTubeOffsetSlider.min = 0; helixTubeOffsetSlider.max = 13; helixTubeOffsetSlider.step = 0.5;
+    helixPitchSlider.value = (state.helixPitchM * M_TO_FT).toFixed(1);
+    helixRInnerSlider.value = (state.helixRInnerM * M_TO_FT).toFixed(1);
+    helixROuterSlider.value = (state.helixROuterM * M_TO_FT).toFixed(1);
+    helixTubeRSlider.value = (state.helixTubeRM * M_TO_FT).toFixed(2);
+    helixTubeOffsetSlider.value = (state.helixTubeOffsetM * M_TO_FT).toFixed(1);
+  }
+}
+syncHelixSliderRanges();
+
 function syncSliderLabels(){
   const u = unitLabels();
   document.getElementById('alphaVal').textContent = state.alphaMax + '°';
@@ -1044,7 +1537,15 @@ function syncSliderLabels(){
   document.getElementById('floorHeightVal').textContent = toDisplayLen(state.floorHeightM).toFixed(1) + ' ' + u.len;
   document.getElementById('resVal').textContent = state.segments;
   document.getElementById('totalHeightNote').textContent =
-    `= ${state.floors} × ${toDisplayLen(state.floorHeightM).toFixed(1)}${u.len} = ${toDisplayLen(totalHeightM()).toFixed(1)}${u.len} total`;
+    `= ${state.floors} × ${toDisplayLen(state.floorHeightM).toFixed(1)}${u.len} = ${toDisplayLen(state.floors*state.floorHeightM).toFixed(1)}${u.len} total`;
+  document.getElementById('helixTurnsVal').textContent = state.helixTurns;
+  document.getElementById('helixPitchVal').textContent = toDisplayLen(state.helixPitchM).toFixed(1) + ' ' + u.len;
+  document.getElementById('helixRInnerVal').textContent = toDisplayLen(state.helixRInnerM).toFixed(1) + ' ' + u.len;
+  document.getElementById('helixROuterVal').textContent = toDisplayLen(state.helixROuterM).toFixed(1) + ' ' + u.len;
+  document.getElementById('helixTubeRVal').textContent = toDisplayLen(state.helixTubeRM).toFixed(2) + ' ' + u.len;
+  document.getElementById('helixTubeOffsetVal').textContent = toDisplayLen(state.helixTubeOffsetM).toFixed(1) + ' ' + u.len;
+  document.getElementById('helixTotalRiseNote').textContent =
+    `= ${state.helixTurns} × ${toDisplayLen(state.helixPitchM).toFixed(1)}${u.len} = ${toDisplayLen(state.helixTurns*state.helixPitchM).toFixed(1)}${u.len} total rise`;
 }
 syncSliderLabels();
 
@@ -1087,6 +1588,35 @@ resSlider.addEventListener('input', e=>{
   state.segments = parseInt(e.target.value);
   syncSliderLabels(); persist(); rebuild();
 });
+helixTurnsSlider.addEventListener('input', e=>{
+  state.helixTurns = parseInt(e.target.value);
+  syncSliderLabels(); persist(); rebuild();
+});
+helixPitchSlider.addEventListener('input', e=>{
+  const v = parseFloat(e.target.value);
+  state.helixPitchM = state.units === 'metric' ? v : v / M_TO_FT;
+  syncSliderLabels(); persist(); rebuild();
+});
+helixRInnerSlider.addEventListener('input', e=>{
+  const v = parseFloat(e.target.value);
+  state.helixRInnerM = state.units === 'metric' ? v : v / M_TO_FT;
+  syncSliderLabels(); persist(); rebuild();
+});
+helixROuterSlider.addEventListener('input', e=>{
+  const v = parseFloat(e.target.value);
+  state.helixROuterM = state.units === 'metric' ? v : v / M_TO_FT;
+  syncSliderLabels(); persist(); rebuild();
+});
+helixTubeRSlider.addEventListener('input', e=>{
+  const v = parseFloat(e.target.value);
+  state.helixTubeRM = state.units === 'metric' ? v : v / M_TO_FT;
+  syncSliderLabels(); persist(); rebuild();
+});
+helixTubeOffsetSlider.addEventListener('input', e=>{
+  const v = parseFloat(e.target.value);
+  state.helixTubeOffsetM = state.units === 'metric' ? v : v / M_TO_FT;
+  syncSliderLabels(); persist(); rebuild();
+});
 
 document.querySelectorAll('.switch').forEach(sw=>{
   const key = sw.dataset.toggle;
@@ -1102,6 +1632,85 @@ document.querySelectorAll('.switch').forEach(sw=>{
 [...presetGrid.children].forEach(c=>{
   c.classList.toggle('active', c.dataset.preset === state.preset);
 });
+
+document.getElementById('ffdResetBtn').addEventListener('click', ()=>{
+  state.ffdOffsets = [0,0,0,0,0,0,0,0].map(()=>({dx:0, dy:0, dz:0}));
+  persist(); rebuild();
+  toast('Control points reset');
+});
+
+// ---------- FFD handle dragging ----------
+// Standard screen-facing-plane drag: on pointerdown over a handle, build a plane through that
+// handle's current position facing the camera, then on pointermove intersect the pointer ray with
+// that fixed plane — gives intuitive free 3D dragging from ordinary 2D pointer input. Disables
+// OrbitControls for the duration so orbiting doesn't fight the drag.
+const raycaster = new THREE.Raycaster();
+const pointerNDC = new THREE.Vector2();
+const dragPlane = new THREE.Plane();
+const dragPoint = new THREE.Vector3();
+let draggingIndex = -1;
+let dragBoxCorner = null;
+
+function setPointerNDC(evt){
+  const rect = renderer.domElement.getBoundingClientRect();
+  pointerNDC.x = ((evt.clientX - rect.left) / rect.width) * 2 - 1;
+  pointerNDC.y = -((evt.clientY - rect.top) / rect.height) * 2 + 1;
+}
+
+renderer.domElement.addEventListener('pointerdown', (evt)=>{
+  if(state.mode !== 'ffd') return;
+  setPointerNDC(evt);
+  raycaster.setFromCamera(pointerNDC, camera);
+  const hits = raycaster.intersectObjects(ffdHandleMeshes);
+  if(hits.length === 0) return;
+  draggingIndex = hits[0].object.userData.ffdIndex;
+  const iu = Math.floor(draggingIndex/4), iv = Math.floor((draggingIndex%4)/2), iw = draggingIndex%2;
+  const h = totalHeightM();
+  const profile = PROFILES[state.preset]();
+  const box = {
+    minX: Math.min(...profile.map(p=>p[0])), maxX: Math.max(...profile.map(p=>p[0])),
+    minZ: Math.min(...profile.map(p=>p[1])), maxZ: Math.max(...profile.map(p=>p[1]))
+  };
+  dragBoxCorner = ffdDefaultCP(box, h, iu, iv, iw);
+  const camDir = new THREE.Vector3();
+  camera.getWorldDirection(camDir);
+  dragPlane.setFromNormalAndCoplanarPoint(camDir, hits[0].object.position);
+  controls.enabled = false;
+  renderer.domElement.style.cursor = 'grabbing';
+  evt.preventDefault();
+});
+
+renderer.domElement.addEventListener('pointermove', (evt)=>{
+  if(state.mode === 'ffd' && draggingIndex === -1){
+    // hover feedback: show a grab cursor over a handle even before dragging
+    setPointerNDC(evt);
+    raycaster.setFromCamera(pointerNDC, camera);
+    renderer.domElement.style.cursor = raycaster.intersectObjects(ffdHandleMeshes).length ? 'grab' : 'auto';
+  }
+  if(draggingIndex === -1) return;
+  setPointerNDC(evt);
+  raycaster.setFromCamera(pointerNDC, camera);
+  if(raycaster.ray.intersectPlane(dragPlane, dragPoint)){
+    state.ffdOffsets[draggingIndex] = {
+      dx: dragPoint.x - dragBoxCorner[0],
+      dy: dragPoint.y - dragBoxCorner[1],
+      dz: dragPoint.z - dragBoxCorner[2]
+    };
+    rebuild();
+  }
+  evt.preventDefault();
+});
+
+function endFfdDrag(){
+  if(draggingIndex === -1) return;
+  draggingIndex = -1;
+  dragBoxCorner = null;
+  controls.enabled = true;
+  renderer.domElement.style.cursor = 'auto';
+  persist();
+}
+renderer.domElement.addEventListener('pointerup', endFfdDrag);
+renderer.domElement.addEventListener('pointerleave', endFfdDrag);
 
 // ---------- render loop ----------
 function animate(){
