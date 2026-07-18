@@ -4,6 +4,22 @@ Interactive explorer of architectural deformation operations — twisting, taper
 Joe.K · axisbim.io
 
 CHANGELOG
+v1.12.0 - 2026-07-18 - Two cleanup items. (1) Added a "?" help modal (header button) covering the
+         app's own controls — operations, editing values, Free's viewport handles, overlays, view
+         navigation, units, export — kept deliberately separate from the sidebar's Reference panel,
+         which cites the book figures the math is drawn from rather than explaining the UI. (2)
+         Fixed the camera needing a manual zoom-out on every load: the boot-time framing ran before
+         solidGroup had any geometry in it, so it fell back to a height-only heuristic that ignored
+         footprint width/depth entirely — a wide/deep sample (or a large-radius Helix) would load
+         mostly outside the frustum. frameCameraDefault() now computes an actual Three.js Box3 fit
+         (circumscribed-sphere radius against both horizontal and vertical FOV, 15% padding) and
+         runs once real geometry exists — hooked into the end of rebuild(), guarded to fire only on
+         the very first build so mid-session zoom/orbit is still left alone (the v1.7.1 decision).
+         The Home button already called the same function, so it inherits the fix for free. Sanity-
+         checked the fit formula against a wide/short case (20×3×20), a tall/narrow one (5×30×5),
+         and the old default-ish twist tower (2×28×2) — the last one's new fit distance (~38m) vs.
+         the old heuristic's actual camera-to-target distance (~15m) is a direct measure of how
+         under-framed the old default was.
 v1.11.0 - 2026-07-18 - .sat export: caps and Shear's side walls now export as single flat ACIS
          faces instead of many small triangles, so picking one in Revit/AutoCAD selects the whole
          plane. Caps are geometrically flat for every mode except Free/FFD (twist/bend rotate or
@@ -423,6 +439,39 @@ v1.0.0 - 2026-07-17 - Initial build. Twist operation on four cross-section prese
   }
   .btn.secondary{background:transparent; color:var(--ink);}
 
+  header #helpBtn{
+    padding:3px 11px; font-size:0.78rem; line-height:1.4;
+  }
+
+  /* Help modal — how to use the app itself (controls, sliders, overlays, export). Deliberately
+     separate from the sidebar's per-mode Reference panel, which cites the book's figures/pages the
+     math comes from — this is app documentation, not theory. */
+  .help-overlay{
+    position:fixed; inset:0; background:rgba(0,0,0,0.5);
+    display:flex; align-items:center; justify-content:center;
+    padding:20px; z-index:70;
+  }
+  .help-box{
+    background:var(--paper); border:1px solid var(--line);
+    max-width:640px; width:100%; max-height:82vh;
+    display:flex; flex-direction:column;
+  }
+  .help-box-head{
+    display:flex; align-items:baseline; justify-content:space-between;
+    padding:18px 22px 12px; border-bottom:1px solid var(--line); flex-shrink:0;
+  }
+  .help-box-head h3{font-size:1rem; letter-spacing:0.02em;}
+  .help-box-body{padding:16px 22px 22px; overflow-y:auto; font-size:0.82rem; line-height:1.6; color:var(--ink);}
+  .help-box-body h4{font-size:0.8rem; letter-spacing:0.03em; text-transform:uppercase; color:var(--prussian); margin:18px 0 6px;}
+  .help-box-body h4:first-child{margin-top:0;}
+  .help-box-body p{margin:0 0 8px;}
+  .help-box-body ul{margin:0 0 8px; padding-left:18px;}
+  .help-box-body li{margin-bottom:4px;}
+  .help-box-body kbd{
+    font-family:'Space Mono',monospace; font-size:0.74rem; background:var(--cream);
+    border:1px solid var(--line); padding:1px 5px;
+  }
+
   footer{
     padding:6px 18px; border-top:1px solid var(--line); background:var(--paper);
     font-size:0.68rem; color:var(--muted); flex-shrink:0;
@@ -443,6 +492,7 @@ v1.0.0 - 2026-07-17 - Initial build. Twist operation on four cross-section prese
   <h1>SPIRA</h1>
   <div class="tag" id="modeTagline">twist deformation, live</div>
   <div class="axis-badge mono" id="formulaBadge">α(z) = (z/h)·α<sub>max</sub></div>
+  <button class="btn secondary" id="helpBtn" title="How to use SPIRA">?</button>
 </header>
 
 <main>
@@ -668,7 +718,7 @@ v1.0.0 - 2026-07-17 - Initial build. Twist operation on four cross-section prese
 <script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
 <script src="https://cdn.jsdelivr.net/npm/three@0.128.0/examples/js/controls/OrbitControls.js"></script>
 <script>
-const APP_VERSION = '1.11.0';
+const APP_VERSION = '1.12.0';
 
 // ---------- toast ----------
 let toastTimer=null;
@@ -705,6 +755,74 @@ function confirmDialog(message, confirmLabel = 'Confirm'){
     document.getElementById('confirmOk').onclick = ()=>cleanup(true);
   });
 }
+
+// ---------- help modal ----------
+// App usage documentation — how to work SPIRA's own controls. Deliberately separate from the
+// sidebar's Reference panel, which explains the underlying math and cites the book figures it's
+// drawn from; this is just "what does this button do."
+const HELP_HTML = `
+  <h4>Operations</h4>
+  <p>The six buttons at the top of the sidebar switch which deformation is applied to the
+  cross-section: Twist, Taper, Shear, Bend, Free (freeform/FFD), and Helix. Each has its own
+  parameters below the switcher — the Reference panel at the bottom of the sidebar explains the
+  math and the book figure each one is drawn from.</p>
+
+  <h4>Cross-section &amp; size</h4>
+  <p>Pick a footprint preset (square, triangle, hexagon, star) and set real-world Width/Depth —
+  every preset scales to whatever you enter, in meters or feet. Height is set as floors ×
+  floor-to-floor height (or, in Helix, turns × pitch) rather than one abstract number.</p>
+
+  <h4>Editing values</h4>
+  <p>Every slider's readout is also a click-to-type field: click the number, type a new one,
+  <kbd>Enter</kbd> or click away to commit, <kbd>Escape</kbd> to cancel. Length fields accept
+  feet-inches notation in Imperial mode — <kbd>8'-6"</kbd>, <kbd>8' 6"</kbd>, or <kbd>8ft 6in</kbd>.
+  Each operation has its own "Reset values" button, restoring just that mode's parameters (and
+  floors/floor-height) to their defaults.</p>
+
+  <h4>Free / FFD handles</h4>
+  <p>Free mode has no sliders for its 8 corner control points — drag the small handle spheres
+  directly in the viewport instead. Click and drag any brick-colored handle to reshape the solid
+  live.</p>
+
+  <h4>Overlays</h4>
+  <p>Toggles in the sidebar control what's drawn alongside the solid: the axis A (and, for
+  Shear/Bend, its moved image A₁), base plane B, ruling lines, slice-resolution rings, per-floor
+  lines, wireframe, and point labels. These are visualization aids only — none of them change the
+  exported geometry.</p>
+
+  <h4>View navigation</h4>
+  <p>Drag to orbit, scroll to zoom, right-drag (or two-finger drag) to pan. <strong>Top</strong>,
+  <strong>Front</strong>, and <strong>Home</strong> in the bottom-right jump to standard
+  architectural plan/elevation/isometric framing — Home also re-fits the camera to whatever's
+  currently on screen.</p>
+
+  <h4>Units</h4>
+  <p>The Metric/Imperial toggle converts every length, area, and volume readout in the HUD and
+  sidebar at once — it doesn't change the underlying model.</p>
+
+  <h4>Export</h4>
+  <p>"Export as .sat" saves the current solid as an ACIS body for AutoCAD/Revit/BricsCAD. Caps and
+  Shear's side walls export as single flat faces; Twist/Taper/Bend/Free/Helix's curved side walls
+  export as many small flat facets, since a genuinely curved surface can't be one flat ACIS face —
+  lowering the resolution slider before export reduces the facet count.</p>
+`;
+function showHelp(){
+  const overlay = document.createElement('div');
+  overlay.className = 'help-overlay';
+  overlay.innerHTML = `
+    <div class="help-box">
+      <div class="help-box-head">
+        <h3>How to use SPIRA</h3>
+        <button class="btn secondary" id="helpClose" style="padding:4px 12px;">Close</button>
+      </div>
+      <div class="help-box-body">${HELP_HTML}</div>
+    </div>`;
+  document.body.appendChild(overlay);
+  const close = ()=> overlay.remove();
+  overlay.addEventListener('click', (e)=>{ if(e.target === overlay) close(); });
+  document.getElementById('helpClose').onclick = close;
+}
+document.getElementById('helpBtn').addEventListener('click', showHelp);
 
 document.getElementById('footVersion').innerHTML =
   `SPIRA · v${APP_VERSION} · Joe.K · <a href="https://axisbim.io" target="_blank" rel="noopener" style="color:inherit;">axisbim.io</a>`;
@@ -1039,20 +1157,32 @@ controls.enableDamping = true;
 controls.dampingFactor = 0.08;
 
 // ---------- view framing (Home / Top / Front buttons) ----------
-// Camera framing scales to whatever height is active — including a persisted state from
-// localStorage, which could be much taller or shorter than the original 8-floor/3.5m default this
-// used to be tuned for. Direction/ratio matches the old fixed (9,8,11), just scaled by actual height
-// instead of hardcoded to it, so a tall tower (many floors, or a multi-turn Helix) doesn't load with
-// the camera buried inside it. Factored into a named function (not just inline boot code) so the
-// Home button can re-run the exact same framing later, not just at load.
+// Camera framing fits the actual rendered bounding box — accounts for footprint width/depth as
+// well as height, so a wide/deep sample (Width/Depth sliders pushed apart, or a Helix with a large
+// outer radius) frames correctly instead of needing a manual zoom-out. Falls back to the old
+// height-only heuristic if called before solidGroup has any geometry in it (shouldn't happen in
+// normal use now that rebuild() calls this itself after the first build — see hasFramedOnce below
+// — but kept as a defensive fallback for the Home button or any other future call site).
 function frameCameraDefault(){
-  const h = totalHeightM();
-  camera.up.set(0, 1, 0);
   const camDir = new THREE.Vector3(9, 8, 11).normalize();
-  const camDist = Math.max(h * 0.58, 6); // 0.58 reproduces the old fixed (9,8,11) framing at h=28m;
-                                          // floor of 6 keeps short/squat shapes from framing too close
-  camera.position.copy(camDir.multiplyScalar(camDist));
-  controls.target.set(0, h/2, 0);
+  camera.up.set(0, 1, 0);
+  const box = new THREE.Box3().setFromObject(solidGroup);
+  if(box.isEmpty()){
+    const h = totalHeightM();
+    const camDist = Math.max(h * 0.58, 6); // 0.58 reproduces the old fixed (9,8,11) framing at h=28m
+    camera.position.copy(camDir.multiplyScalar(camDist));
+    controls.target.set(0, h/2, 0);
+    controls.update();
+    return;
+  }
+  const center = box.getCenter(new THREE.Vector3());
+  const size = box.getSize(new THREE.Vector3());
+  const radius = size.length() / 2; // exact circumscribed-sphere radius of the bounding box
+  const vFov = camera.fov * Math.PI/180;
+  const hFov = 2 * Math.atan(Math.tan(vFov/2) * camera.aspect);
+  const fitDist = Math.max(radius / Math.sin(vFov/2), radius / Math.sin(hFov/2)) * 1.15; // 15% pad
+  camera.position.copy(center.clone().add(camDir.multiplyScalar(Math.max(fitDist, 6))));
+  controls.target.copy(center);
   controls.update();
 }
 // Top: looks straight down the world y-axis — the standard architectural plan view. A perfectly
@@ -1077,7 +1207,8 @@ function frameCameraFront(){
   controls.target.set(0, h/2, 0);
   controls.update();
 }
-frameCameraDefault();
+// First-build camera fit happens inside rebuild() itself (see hasFramedOnce below), once actual
+// geometry exists — calling frameCameraDefault() here would just hit its empty-box fallback.
 
 scene.add(new THREE.AmbientLight(0xffffff, 0.65));
 const key = new THREE.DirectionalLight(0xffffff, 0.9);
@@ -1249,6 +1380,9 @@ function buildHelicalGeometry(genPts, closed, uSegs, height, params){
 }
 
 let currentMesh = null;
+let hasFramedOnce = false; // camera auto-fits to the model's actual bounding box once, on the
+                            // first rebuild() — see frameCameraDefault(). After that, mid-session
+                            // zoom/orbit is left alone (v1.7.1 decision), same as before.
 let lastBuild = null; // {mode, profile, params, h, closed, n} — captured each rebuild() for the
                        // .sat exporter to reconstruct caps (and Shear's side walls) as single flat
                        // faces analytically, instead of reading them back out of the triangulated
@@ -1637,6 +1771,8 @@ function rebuild(){
   document.getElementById('footRight').textContent = state.mode === 'helix'
     ? `${state.helixGenerator === 'line' ? 'Line generator' : 'Circle generator'} · ${paramSummary} · ${state.helixTurns} turns · h ${toDisplayLen(h).toFixed(1)}${u.len} · ${segs} segments`
     : `${PRESET_LABELS[state.preset]} · ${paramSummary} · ${state.floors} floors · h ${toDisplayLen(h).toFixed(1)}${u.len} · ${state.segments} slices`;
+
+  if(!hasFramedOnce){ frameCameraDefault(); hasFramedOnce = true; }
 }
 
 // ---------- UI wiring ----------

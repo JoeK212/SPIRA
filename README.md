@@ -83,10 +83,15 @@ viewport for standard orthographic-ish framing, alongside the usual orbit/pan/zo
 labeled "0,0,0" is always visible at the true world origin when the Axis overlay is on, as a fixed
 reference point regardless of view.
 
+**Help.** The "?" button in the header opens usage documentation for the app's own controls —
+separate from the Reference panel below, which cites the book figures the math is drawn from.
+
 **Export.** The current solid can be exported as a faceted ACIS (.sat) body — every triangle
 already on screen becomes one exact planar ACIS face, so the export matches the render exactly
 with no curve-fitting. Twist/Taper/Shear/Bend/Free export as a closed solid; Helix's open
-ribbon/tube exports as an open sheet body.
+ribbon/tube exports as an open sheet body. Caps and Shear's side walls export as single flat faces
+instead of many facets, since they're provably planar; Twist/Taper/Bend/Free/Helix's curved side
+walls stay faceted, since a genuinely curved surface can't be one flat ACIS face.
 
 Single HTML file, no build step, Three.js (r128) via CDN. Deployed via GitHub → Netlify
 continuous deployment.
