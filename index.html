@@ -4,6 +4,16 @@ Interactive explorer of architectural deformation operations — twisting, taper
 Joe.K · axisbim.io
 
 CHANGELOG
+v1.14.2 - 2026-07-18 - Fixed two visual bugs. (1) Slice rings overlay was z-fighting with the mesh
+         surface it's coincident with, showing as fine horizontal striping/banding across the whole
+         solid, most visible at higher resolution (many closely-spaced rings). Each ring's vertices
+         are now nudged outward from the ring's own centroid before drawing, a generic post-hoc
+         offset (unlike floor lines' mode-aware 1.03x-profile recompute) since slice rings share the
+         same code path across every mode including helix. (2) Profile point labels (a,b,c.../
+         a1,b1,c1...) used a fixed 0.9x0.45 world-unit sprite size that read too small once the
+         solid itself was building-scale — sizeMult now scales the label with the model's own
+         height (Math.max(h*0.045, 1.4) floor), same proportional-with-a-floor pattern already used
+         for the origin marker and FFD handles.
 v1.14.1 - 2026-07-18 - Docs cleanup for a full upload package: removed the remaining figure/page
          citations from developer-facing code comments (HELIX_GENERATORS, computeLayerPoint) —
          v1.12.1 already fixed the user-visible Reference panel text, but these internal comments
@@ -793,7 +803,7 @@ v1.0.0 - 2026-07-17 - Initial build. Twist operation on four cross-section prese
 <script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
 <script src="https://cdn.jsdelivr.net/npm/three@0.128.0/examples/js/controls/OrbitControls.js"></script>
 <script>
-const APP_VERSION = '1.14.1';
+const APP_VERSION = '1.14.2';
 
 // ---------- toast ----------
 let toastTimer=null;
@@ -1475,7 +1485,7 @@ let ffdHandleMeshes = []; // current draggable FFD handle meshes, rebuilt every 
                            // pointer handlers (wired once, outside rebuild) raycast against this
                            // live array so they always hit whatever's currently in the scene.
 
-function spriteLabel(text, color){
+function spriteLabel(text, color, sizeMult=1){
   const cnv = document.createElement('canvas');
   cnv.width = 128; cnv.height = 64;
   const ctx = cnv.getContext('2d');
@@ -1486,7 +1496,7 @@ function spriteLabel(text, color){
   const tex = new THREE.CanvasTexture(cnv);
   const mat = new THREE.SpriteMaterial({ map: tex, depthTest:false });
   const spr = new THREE.Sprite(mat);
-  spr.scale.set(0.9, 0.45, 1);
+  spr.scale.set(0.9*sizeMult, 0.45*sizeMult, 1);
   return spr;
 }
 
@@ -1596,7 +1606,20 @@ function rebuild(){
         const idx = (j*n + (i%n)) * 3;
         ringPts.push(new THREE.Vector3(layerPositions[idx], layerPositions[idx+1], layerPositions[idx+2]));
       }
-      const ringGeo = new THREE.BufferGeometry().setFromPoints(ringPts);
+      // Nudge every ring vertex outward from the ring's own centroid before drawing. Unlike the
+      // floor-lines overlay (which recomputes its points via computeLayerPoint on a 1.03x-scaled
+      // profile), slice rings reuse the raw layerPositions the mesh itself was built from, so at
+      // rest they sit exactly coincident with the surface — at higher resolution (many rings close
+      // together) that z-fighting reads as a fine horizontal striping artifact across the whole
+      // solid rather than a clean ring per layer. A generic post-hoc nudge (rather than a mode-aware
+      // recompute) is used here since slice rings are shared across every mode including helix.
+      const centroid = new THREE.Vector3();
+      ringPts.forEach(p => centroid.add(p));
+      centroid.divideScalar(ringPts.length);
+      const nudgedPts = ringPts.map(p => p.clone().add(
+        new THREE.Vector3().subVectors(p, centroid).multiplyScalar(0.02)
+      ));
+      const ringGeo = new THREE.BufferGeometry().setFromPoints(nudgedPts);
       overlayGroup.add(new THREE.Line(ringGeo, ringMat));
     }
   }
@@ -1716,16 +1739,21 @@ function rebuild(){
   // a generator point [X(v), Y(v)] (radial, height-offset) rather than an [x,z] footprint point, so
   // its bottom anchor sits at u=0 (x=X(v), z≈0) instead of the other modes' fixed-height-plan layout.
   if(state.overlays.labels){
+    // Fixed 0.9x0.45 (world units) read too small once the solid itself is building-scale (tens of
+    // meters/feet tall) — sizeMult scales the sprite with the model, same Math.max(proportional,
+    // floor) pattern used elsewhere (origin marker, FFD handles) so labels stay legible at both
+    // small and large heights instead of a single constant that only looked right at one scale.
+    const labelSizeMult = Math.max(h*0.045, 1.4);
     const names = ['a','b','c','d','e','f','g','h','i','j'];
     for(let i=0;i<Math.min(n, names.length); i++){
       const bp = profile[i];
-      const bLabel = spriteLabel(names[i], '#1a1a18');
+      const bLabel = spriteLabel(names[i], '#1a1a18', labelSizeMult);
       if(state.mode === 'helix') bLabel.position.set(bp[0]*1.06, bp[1]+0.25, 0.12);
       else bLabel.position.set(bp[0]*1.12, 0.25, bp[1]*1.12);
       overlayGroup.add(bLabel);
 
       const [tx,tyOut,tz] = computeLayerPoint(state.mode, params, h, h, profile[i]);
-      const tLabel = spriteLabel(names[i]+'₁', '#b23a2e');
+      const tLabel = spriteLabel(names[i]+'₁', '#b23a2e', labelSizeMult);
       tLabel.position.set(tx*1.12, tyOut+0.25, tz*1.12);
       overlayGroup.add(tLabel);
     }
