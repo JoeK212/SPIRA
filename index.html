@@ -4,6 +4,20 @@ Interactive explorer of architectural deformation operations — twisting, taper
 Joe.K · axisbim.io
 
 CHANGELOG
+v1.17.0 - 2026-07-18 - Added Capital Gate (RMJM, Abu Dhabi, 2011 — 160m, 35 floors, 18° lean,
+         Guinness-certified world's farthest leaning man-made building) as a case study for Shear,
+         the first case study outside Twist. Generalized the case-study system (CASE_STUDIES/
+         loadCaseStudy, previously Twist-only) to a mode field + fields object per entry, so adding
+         a case study to any mode is now just a data entry rather than new plumbing. Named the honest
+         approximation directly in-app: the real building's lean isn't linear from the base (floor
+         plates stack straight through roughly the 12th storey, then lean at an accelerating rate
+         above that) the way SPIRA's Shear is, so this preset's constant linear shear simplifies the
+         real, non-uniform lean profile — height/floors/total lean angle are still sourced figures.
+         Bumped the shear offset slider range ±8m/±25ft -> ±60m/±200ft to fit (18° over 160m needs
+         ~52m of offset). Investigated and rejected two other candidates rather than force a fit: The
+         Bow (Calgary) turned out to curve in PLAN (crescent footprint extruded straight up) rather
+         than along its axis, so it doesn't actually match what Bend models geometrically; no
+         sufficiently well-documented pure-linear-taper or pure-Bend building was found yet either.
 v1.16.1 - 2026-07-18 - Fixed a blank canvas after loading the Cayan Tower case study (user report:
          "Home leaves you blank space"). The camera's far clipping plane was a fixed 200 units —
          harmless at classroom-model scale, but Cayan Tower is 306m tall internally (real meters,
@@ -722,6 +736,15 @@ v1.0.0 - 2026-07-17 - Initial build. Twist operation on four cross-section prese
           <input type="range" id="shearDYSlider" min="-8" max="8" step="0.1" value="1">
         </div>
         <button class="btn secondary reset-btn" data-resetmode="shear" style="width:100%; margin-top:6px;">Reset values</button>
+        <div style="font-size:0.78rem; color:var(--muted); margin:14px 0 8px;">
+          Case study (real leaning building)
+        </div>
+        <button class="btn secondary" data-casestudy="capitalgate" style="width:100%; font-size:0.74rem;">Capital Gate</button>
+        <div style="font-size:0.68rem; color:var(--muted); line-height:1.4; margin-top:4px;">
+          Height, floor count, and total lean are sourced; footprint size is an illustrative estimate,
+          and the real lean isn't linear from the base the way this preset's shear is — see the app's
+          notes for that simplification.
+        </div>
       </div>
       <div id="bendParamsBlock" style="display:none;">
         <div class="slider-row">
@@ -876,7 +899,7 @@ v1.0.0 - 2026-07-17 - Initial build. Twist operation on four cross-section prese
 <script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
 <script src="https://cdn.jsdelivr.net/npm/three@0.128.0/examples/js/controls/OrbitControls.js"></script>
 <script>
-const APP_VERSION = '1.16.1';
+const APP_VERSION = '1.17.0';
 
 // ---------- toast ----------
 let toastTimer=null;
@@ -2293,13 +2316,13 @@ syncFloorHeightSliderRange();
 
 function syncShearSliderRange(){
   if(state.units === 'metric'){
-    shearDXSlider.min = -8; shearDXSlider.max = 8; shearDXSlider.step = 0.1;
-    shearDYSlider.min = -8; shearDYSlider.max = 8; shearDYSlider.step = 0.1;
+    shearDXSlider.min = -60; shearDXSlider.max = 60; shearDXSlider.step = 0.1;
+    shearDYSlider.min = -60; shearDYSlider.max = 60; shearDYSlider.step = 0.1;
     shearDXSlider.value = state.shearDXM.toFixed(1);
     shearDYSlider.value = state.shearDYM.toFixed(1);
   } else {
-    shearDXSlider.min = -25; shearDXSlider.max = 25; shearDXSlider.step = 0.5;
-    shearDYSlider.min = -25; shearDYSlider.max = 25; shearDYSlider.step = 0.5;
+    shearDXSlider.min = -200; shearDXSlider.max = 200; shearDXSlider.step = 0.5;
+    shearDYSlider.min = -200; shearDYSlider.max = 200; shearDYSlider.step = 0.5;
     shearDXSlider.value = (state.shearDXM * M_TO_FT).toFixed(1);
     shearDYSlider.value = (state.shearDYM * M_TO_FT).toFixed(1);
   }
@@ -2516,51 +2539,61 @@ document.querySelectorAll('.reset-btn').forEach(btn=>{
   btn.addEventListener('click', ()=> resetModeValues(btn.dataset.resetmode));
 });
 
-// ---------- twist case studies (real buildings) ----------
-// Height, floor count, and total twist angle are sourced, documented figures for each building.
-// Footprint width/depth are NOT sourced from a published plan dimension — they're a rough
-// illustrative estimate sized to look proportionate, called out as such in the UI (see the note
-// under the case-study buttons) rather than presented as if they were verified. Both buildings were
-// chosen specifically because they're twist-only (no accompanying taper), so a single Twist-mode
-// preset actually represents them honestly — a twisting-AND-tapering building like Shanghai Tower
-// would need combined operations this tool doesn't support yet, and modeling it as twist-only here
-// would misrepresent its real form.
+// ---------- case studies (real buildings) ----------
+// Height, floor count, and the mode's headline deformation figure (twist angle / lean angle) are
+// sourced, documented figures for each building. Footprint width/depth are NOT sourced from a
+// published plan dimension — they're a rough illustrative estimate sized to look proportionate,
+// called out as such in the UI (see the note under the case-study buttons) rather than presented as
+// if they were verified. Buildings are only added here when a SINGLE SPIRA operation genuinely
+// represents their real form — Shanghai Tower (twists AND tapers) was deliberately left out of
+// Twist's case studies for this reason, and the same bar applies to every mode: a building that
+// combines two deformations, or whose real motion isn't the one this mode models (e.g. The Bow in
+// Calgary curves in PLAN — a crescent footprint extruded straight up — not along its axis the way
+// Bend does; it was investigated and rejected for exactly this reason), doesn't get a preset just to
+// have more of them.
 const CASE_STUDIES = {
   turningtorso: {
-    label: 'Turning Torso',
-    preset: 'square', alphaMax: 90, floors: 54, floorHeightM: 190/54,
-    footprintWidthM: 23, footprintDepthM: 23,
+    mode: 'twist', label: 'Turning Torso',
+    fields: { preset:'square', alphaMax:90, floors:54, floorHeightM:190/54, footprintWidthM:23, footprintDepthM:23 },
     toast: 'Turning Torso — 190m, 54 floors, 90° twist (Calatrava, Malmö, 2005)'
   },
   cayantower: {
-    label: 'Cayan Tower',
-    preset: 'hexagon', alphaMax: 90, floors: 73, floorHeightM: 306/73,
-    footprintWidthM: 22, footprintDepthM: 22,
+    mode: 'twist', label: 'Cayan Tower',
+    fields: { preset:'hexagon', alphaMax:90, floors:73, floorHeightM:306/73, footprintWidthM:22, footprintDepthM:22 },
     toast: 'Cayan Tower — 306m, 73 floors, 90° twist (SOM, Dubai, 2013)'
+  },
+  capitalgate: {
+    mode: 'shear', label: 'Capital Gate',
+    // 18° lean over 160m -> horizontal offset = 160*tan(18°) ≈ 52.0m, applied entirely in one
+    // direction (DY=0). One honest approximation worth naming: the real building's lean isn't
+    // linear from the base the way SPIRA's Shear is — floor plates stack straight up through
+    // roughly the 12th storey, and only lean (accelerating) above that — so this preset's constant
+    // linear shear is a simplification of the real, non-uniform lean profile, not a literal match.
+    fields: { preset:'square', shearDXM: -(160*Math.tan(18*Math.PI/180)), shearDYM:0, floors:35, floorHeightM:160/35, footprintWidthM:25, footprintDepthM:25 },
+    toast: 'Capital Gate — 160m, 35 floors, 18° lean (RMJM, Abu Dhabi, 2011)'
   }
 };
 function loadCaseStudy(key){
   const cs = CASE_STUDIES[key];
   if(!cs) return;
-  state.mode = 'twist';
-  state.preset = cs.preset;
-  state.alphaMax = cs.alphaMax;
-  state.floors = cs.floors;
-  state.floorHeightM = cs.floorHeightM;
-  state.footprintWidthM = cs.footprintWidthM;
-  state.footprintDepthM = cs.footprintDepthM;
+  state.mode = cs.mode;
+  Object.assign(state, cs.fields);
   // Reposition every affected control to match, same approach resetModeValues uses — unit-aware
   // sync functions so this lands correctly whether the sidebar is currently metric or imperial.
-  [...presetGrid.children].forEach(c=>c.classList.toggle('active', c.dataset.preset === cs.preset));
+  // Sliders belonging to modes other than cs.mode are harmless to update even while hidden.
+  [...presetGrid.children].forEach(c=>c.classList.toggle('active', c.dataset.preset === state.preset));
   alphaSlider.value = state.alphaMax;
+  shearDXSlider.value = state.shearDXM;
+  shearDYSlider.value = state.shearDYM;
   floorsSlider.value = state.floors;
   syncFloorHeightSliderRange();
   syncFootprintSliderRange();
+  syncShearSliderRange();
   applyModeChrome();
   syncSliderLabels(); persist(); rebuild();
   toast(cs.toast);
 }
-document.querySelectorAll('#twistCaseStudyGrid [data-casestudy]').forEach(btn=>{
+document.querySelectorAll('[data-casestudy]').forEach(btn=>{
   btn.addEventListener('click', ()=> loadCaseStudy(btn.dataset.casestudy));
 });
 

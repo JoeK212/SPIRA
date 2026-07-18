@@ -20,7 +20,10 @@ with twist.
 **Shear** — the first of two operations where the axis A doesn't stay fixed. Each slice is
 translated within its own plane, linear from (0,0) at the base to (Δx,Δy) at the top, so the axis's
 image A₁ leans away from the original A (shown as a dashed reference line alongside the solid A₁).
-Translation is an exact isometry, so shear preserves volume, same as twist.
+Translation is an exact isometry, so shear preserves volume, same as twist. A case study loads
+**Capital Gate** (RMJM, Abu Dhabi, 2011 — 160m, 35 floors, 18° lean, Guinness-certified world's
+farthest leaning man-made building); height/floors/lean angle are sourced, though the real building's
+lean isn't linear from the base the way this preset's shear is — noted directly in the app.
 
 **Bend** — the axis A maps to a circular arc A₁ of radius R = h/β, chosen so the arc length exactly
 equals the original axis length h. Each slice is rearranged into the plane normal to that arc, with
