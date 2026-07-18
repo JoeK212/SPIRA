@@ -4,6 +4,18 @@ Interactive explorer of architectural deformation operations — twisting, taper
 Joe.K · axisbim.io
 
 CHANGELOG
+v1.12.2 - 2026-07-18 - Fixed a "pinched"/herringbone shading artifact visible on Bend/Taper (and
+         likely any curved mode) at higher resolutions — user spotted diagonal chevron-like light
+         patterns across the side faces that didn't correspond to any real edge. Root cause: the
+         side material used default smooth (Gouraud) shading, which averages vertex normals across
+         each quad's diagonal crease — and since v1.2.0 picks whichever diagonal is shorter
+         independently per quad (to minimize that crease), neighboring quads can end up split in
+         opposite directions, so smooth shading blends together inconsistently-oriented triangles
+         and produces a false light pattern with no matching geometry. Switched both the side and
+         cap materials to flatShading:true, so each triangle renders with its own true face normal
+         instead — also the more geometrically honest choice, since the surface actually is
+         faceted; raising the resolution slider (not normal-blending) is what should make it look
+         smoother.
 v1.12.1 - 2026-07-18 - Rewrote all six Reference panels (and two leftover HUD strings for Helix)
          to drop every figure/page citation ("Fig. 13.3-13.6", "p.456", etc.) — user reported the
          numbers don't correspond to anything real. Each panel now explains the operation
@@ -725,7 +737,7 @@ v1.0.0 - 2026-07-17 - Initial build. Twist operation on four cross-section prese
 <script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
 <script src="https://cdn.jsdelivr.net/npm/three@0.128.0/examples/js/controls/OrbitControls.js"></script>
 <script>
-const APP_VERSION = '1.12.1';
+const APP_VERSION = '1.12.2';
 
 // ---------- toast ----------
 let toastTimer=null;
@@ -1466,12 +1478,21 @@ function rebuild(){
 
   lastBuild = { mode: state.mode, profile, params, h, closed, n };
 
+  // flatShading:true (not the default smooth/Gouraud shading): each deformed quad's two triangles
+  // meet at a real dihedral crease (v1.2.0 picks the shorter diagonal per quad to minimize it, but
+  // it isn't zero, and which diagonal is shorter varies quad to quad). Smooth shading averages
+  // vertex normals ACROSS that crease using whichever triangles happen to share each vertex —
+  // since neighboring quads can pick opposite diagonal directions, that averaging blends together
+  // inconsistently-oriented facets and produces a false herringbone/"pinched" light pattern that
+  // doesn't correspond to any real edge. Flat shading renders each triangle with its own true
+  // normal instead, which is also the geometrically honest choice for a surface that actually is
+  // faceted — raising the resolution slider is what makes it look smoother, not normal-blending.
   const material = new THREE.MeshStandardMaterial({
-    color: 0x7d92a0, metalness:0.05, roughness:0.65,
+    color: 0x7d92a0, metalness:0.05, roughness:0.65, flatShading: true,
     side: THREE.DoubleSide, wireframe: state.overlays.wireframe
   });
   const capMaterial = new THREE.MeshStandardMaterial({
-    color: 0x64788a, metalness:0.05, roughness:0.7,
+    color: 0x64788a, metalness:0.05, roughness:0.7, flatShading: true,
     side: THREE.DoubleSide, wireframe: state.overlays.wireframe
   });
 
