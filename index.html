@@ -4,6 +4,45 @@ Interactive explorer of architectural deformation operations — twisting, taper
 Joe.K · axisbim.io
 
 CHANGELOG
+v1.18.0 - 2026-07-18 - Added Octagon and Ellipse cross-section presets (user's request for more
+         realistic footprint shapes alongside Star, which stays — "fun to play with" per the user,
+         just no longer the only non-rectilinear option). Octagon is a straight-edge n-gon, same
+         treatment as Square/Triangle/Hexagon/Star (faceted panels, sharp corners — real corners on
+         a real polygon). Ellipse required a genuine architecture addition: it has no real corners
+         anywhere around its loop, so faceting it into 32 private sharp-edged panels (its sample
+         count) would show visible facets on something meant to read as smoothly curved — the same
+         problem Helix's Circle/Pipe generator solved in v1.17.1. buildDeformedGeometry gained a
+         smoothCrossSection path (new PRESET_SMOOTH lookup, currently just {ellipse:true}): shared
+         vertices around the whole loop instead of per-edge duplication, analytic per-vertex normals
+         via finite difference across neighboring PROFILE points (approximating the true ellipse
+         tangent) crossed with the height tangent — same technique as the faceted path's exact
+         straight-edge tangent, just approximate instead of exact since there's no single straight
+         edge to be exact about. Initially shipped with an inverted normal sign (100% inward-facing
+         in headless testing) from copying buildHelicalGeometry's cross-product order, which uses a
+         different winding convention than buildDeformedGeometry's own faceted path — caught before
+         release, fixed to match the faceted path's own order instead. Verified headlessly (Node +
+         three.js): 0 inward-facing normals and 0 NaNs for Ellipse across twist (untwisted and 90°)
+         and NaN-freedom across taper/shear/bend; Octagon verified NaN-free through the existing
+         faceted path.
+v1.17.1 - 2026-07-18 - Fixed a visible artifact on Helix's Line generator user asked about from a
+         screenshot: a dense fan of thin lines radiating from the axis across the ramp. Same root
+         cause as the striping fixed in v1.14.3 for the other five modes (flat shading's Mach-band
+         effect on a surface built from many thin facets — here 3 turns x 120 resolution = 360 of
+         them) but never applied to Helix, which was left flat-shaded at the time. Rebuilt
+         buildHelicalGeometry to compute analytic per-vertex normals (height/sweep tangent via
+         finite difference, generator/circumference tangent via finite difference across neighboring
+         generator SAMPLES — exact for Line's single straight segment, a good approximation of the
+         true tangent for Circle/Pipe's 24-sample circle) instead of Three.js's face-averaging
+         computeVertexNormals(), the same technique already used for the other five modes. Unlike
+         those modes' polygon-corner panels, Helix's generator direction has no real corners to
+         preserve — Line is one continuous edge, Circle/Pipe's 24-gon is meant to read as a smooth
+         round tube — so normals are shared/smooth across the whole generator direction, not split
+         per-panel. All three generators (Line/Circle/Pipe) now get smooth shading; verified
+         headlessly (Node + three.js) that normals are outward-facing and NaN-free for all three —
+         initially shipped with an inverted sign for Circle/Pipe's tube surface (100% inward-facing
+         against the tube's own centerline in testing), caught before release by testing orientation
+         against each generator's actual local reference rather than only the global axis, and fixed
+         by flipping the cross-product order.
 v1.17.0 - 2026-07-18 - Added Capital Gate (RMJM, Abu Dhabi, 2011 — 160m, 35 floors, 18° lean,
          Guinness-certified world's farthest leaning man-made building) as a case study for Shear,
          the first case study outside Twist. Generalized the case-study system (CASE_STUDIES/
@@ -899,7 +938,7 @@ v1.0.0 - 2026-07-17 - Initial build. Twist operation on four cross-section prese
 <script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
 <script src="https://cdn.jsdelivr.net/npm/three@0.128.0/examples/js/controls/OrbitControls.js"></script>
 <script>
-const APP_VERSION = '1.17.0';
+const APP_VERSION = '1.18.0';
 
 // ---------- toast ----------
 let toastTimer=null;
@@ -1075,6 +1114,21 @@ const PROFILES = {
     for(let i=0;i<n;i++){ const a = i*2*Math.PI/n; pts.push([r*Math.cos(a), r*Math.sin(a)]); }
     return pts;
   },
+  octagon: () => {
+    const pts=[]; const n=8, r=1.1;
+    for(let i=0;i<n;i++){ const a = Math.PI/8 + i*2*Math.PI/n; pts.push([r*Math.cos(a), r*Math.sin(a)]); }
+    return pts;
+  },
+  ellipse: () => {
+    // Densely sampled (n=32, divisible by 4 so the cardinal points land exactly on the bounding
+    // box) rather than a true smooth curve, since every other preset here is a discrete point
+    // array too — but see PRESET_SMOOTH below: unlike a polygon, this one has no real corners
+    // anywhere around the loop, so it's rendered with shared, fully smooth normals instead of a
+    // sharp edge at every one of these 32 sample points.
+    const pts=[]; const n=32, rx=1.3, rz=0.85;
+    for(let i=0;i<n;i++){ const a = i*2*Math.PI/n; pts.push([rx*Math.cos(a), rz*Math.sin(a)]); }
+    return pts;
+  },
   star: () => {
     const pts=[]; const n=5, rOuter=1.35, rInner=0.55;
     for(let i=0;i<n*2;i++){
@@ -1085,7 +1139,12 @@ const PROFILES = {
     return pts;
   }
 };
-const PRESET_LABELS = { square:'Square', triangle:'Triangle', hexagon:'Hexagon', star:'Star' };
+const PRESET_LABELS = { square:'Square', triangle:'Triangle', hexagon:'Hexagon', octagon:'Octagon', ellipse:'Ellipse', star:'Star' };
+// Which presets have no real corners around their loop, and so should render with one shared,
+// fully smooth normal field (buildDeformedGeometry's smoothCrossSection path) instead of a private,
+// sharp-cornered panel at every profile edge — the same distinction Helix's Circle/Pipe generator
+// already needed against its own Line generator (v1.17.1).
+const PRESET_SMOOTH = { ellipse: true };
 
 // Scales a preset's raw (arbitrary-proportioned) shape so its bounding box exactly matches the
 // user's real-world footprintWidthM/footprintDepthM, independently per axis. Used by both rebuild()
@@ -1490,7 +1549,7 @@ function distSqArr(arr, ia, ib){
   return dx*dx+dy*dy+dz*dz;
 }
 
-function buildDeformedGeometry(profile, height, segs, mode, params){
+function buildDeformedGeometry(profile, height, segs, mode, params, smoothCrossSection){
   const n = profile.length;
 
   // layerPositions: one vertex per profile corner per layer, shared across panels — this is the
@@ -1505,70 +1564,118 @@ function buildDeformedGeometry(profile, height, segs, mode, params){
     }
   }
 
-  // Render mesh: built per-panel (the straight edge between profile corner i and i+1 of an
-  // n-gon), each panel with its own private pair of vertex columns rather than sharing corner
-  // vertices with its neighboring panel. That split matters because it lets the side surface use
-  // smooth per-vertex normals along height (removing the flat-shading Mach-band striping visible
-  // at high resolution — v1.14.2's slice-ring fix addressed a real but separate z-fighting issue,
-  // not this one) while keeping a genuine sharp edge at every real polygon corner, where the cross-
-  // section actually does have a crease. Normals are computed analytically rather than via
-  // Three.js's face-averaging computeVertexNormals(), since the earlier herringbone bug (v1.12.2)
-  // came from averaging across a per-quad diagonal choice that flips direction quad to quad —
-  // analytic normals don't depend on that triangulation choice at all.
-  const positions = [];
-  const normals = [];
-  const indices = [];
   const dY = Math.max(height/segs, 1e-5) * 0.5; // finite-difference step for the height tangent
+  let sideGeo;
 
-  for(let i=0;i<n;i++){
-    const iN = (i+1) % n;
-    const panelBase = positions.length / 3;
+  if(smoothCrossSection){
+    // Round profiles (Ellipse) have no real corners anywhere around the loop — unlike a polygon
+    // footprint, faceting it into private per-edge panels would show visible facets on something
+    // meant to read as smoothly curved, the same problem Helix's Circle/Pipe generator solved by
+    // sharing normals across its whole generator direction (v1.17.1). Same technique here: shared
+    // vertices around the whole loop, per-vertex normals via finite difference across NEIGHBORING
+    // PROFILE POINTS (a good approximation of the true ellipse tangent at this sampling density)
+    // crossed with the height tangent, rather than the exact-straight-edge tangent the faceted path
+    // below uses (which would be wrong here — there's no single straight edge to be exact about).
+    const positions = [];
+    const normals = [];
+    const indices = [];
     for(let j=0; j<=segs; j++){
       const y = (j/segs) * height;
-      const left  = computeLayerPoint(mode, params, y, height, profile[i]);
-      const right = computeLayerPoint(mode, params, y, height, profile[iN]);
-
-      // Width tangent (∂S/∂u): exact, not approximated — a panel is a ruled straight-line surface
-      // between two corners at any given height, so its width-direction derivative is just the
-      // edge vector itself, constant along that edge.
-      const tw = [ right[0]-left[0], right[1]-left[1], right[2]-left[2] ];
-
-      // Height tangent (∂S/∂v) per column, central difference (one-sided at the two ends).
       const yLo = Math.max(0, y-dY), yHi = Math.min(height, y+dY);
       const denom = (yHi - yLo) || dY;
-      const lLo = computeLayerPoint(mode, params, yLo, height, profile[i]);
-      const lHi = computeLayerPoint(mode, params, yHi, height, profile[i]);
-      const tvL = [ (lHi[0]-lLo[0])/denom, (lHi[1]-lLo[1])/denom, (lHi[2]-lLo[2])/denom ];
-      const rLo = computeLayerPoint(mode, params, yLo, height, profile[iN]);
-      const rHi = computeLayerPoint(mode, params, yHi, height, profile[iN]);
-      const tvR = [ (rHi[0]-rLo[0])/denom, (rHi[1]-rLo[1])/denom, (rHi[2]-rLo[2])/denom ];
-
-      // Outward normal = tangent-height × tangent-width — this ordering (not the reverse) is what
-      // matches the outward-winding convention already established below and verified elsewhere in
-      // this file against a known-correct THREE.BoxGeometry reference (see the indices comment).
-      const nL = normalize3(cross3(tvL, tw));
-      const nR = normalize3(cross3(tvR, tw));
-
-      positions.push(left[0], left[1], left[2]);   normals.push(nL[0], nL[1], nL[2]);
-      positions.push(right[0], right[1], right[2]); normals.push(nR[0], nR[1], nR[2]);
+      for(let i=0;i<n;i++){
+        const [x,yOut,z] = computeLayerPoint(mode, params, y, height, profile[i]);
+        positions.push(x, yOut, z);
+        const pLo = computeLayerPoint(mode, params, yLo, height, profile[i]);
+        const pHi = computeLayerPoint(mode, params, yHi, height, profile[i]);
+        const tHeight = [ (pHi[0]-pLo[0])/denom, (pHi[1]-pLo[1])/denom, (pHi[2]-pLo[2])/denom ];
+        const iPrev = (i-1+n)%n, iNext = (i+1)%n;
+        const pPrev = computeLayerPoint(mode, params, y, height, profile[iPrev]);
+        const pNext = computeLayerPoint(mode, params, y, height, profile[iNext]);
+        const tGen = [ pNext[0]-pPrev[0], pNext[1]-pPrev[1], pNext[2]-pPrev[2] ];
+        // Orientation verified headlessly (Node + three.js) before shipping — same cross order as
+        // the faceted path below (height-tangent × generator-tangent), since this path shares that
+        // path's indices winding convention, not buildHelicalGeometry's (which uses the opposite
+        // winding for an unrelated reason — see the comment there).
+        const nrm = normalize3(cross3(tHeight, tGen));
+        normals.push(nrm[0], nrm[1], nrm[2]);
+      }
     }
     for(let j=0;j<segs;j++){
-      const a = panelBase + j*2;        // left,  layer j
-      const b = panelBase + j*2 + 1;    // right, layer j
-      const c = panelBase + (j+1)*2 + 1;// right, layer j+1
-      const d = panelBase + (j+1)*2;    // left,  layer j+1
-      // Same shorter-diagonal-first split as before (purely cosmetic now that normals are analytic
-      // rather than face-derived, but kept for consistency); same outward winding too.
-      const dAC = distSqArr(positions,a,c), dBD = distSqArr(positions,b,d);
-      if(dAC <= dBD) indices.push(a,c,b, a,d,c);
-      else indices.push(a,d,b, b,d,c);
+      for(let i=0;i<n;i++){
+        const a = j*n+i, b = j*n+(i+1)%n, c = (j+1)*n+(i+1)%n, d = (j+1)*n+i;
+        indices.push(a,c,b, a,d,c); // outward winding, matches the faceted path's own convention
+      }
     }
-  }
+    sideGeo = new THREE.BufferGeometry();
+    sideGeo.setAttribute('position', new THREE.Float32BufferAttribute(positions, 3));
+    sideGeo.setAttribute('normal', new THREE.Float32BufferAttribute(normals, 3));
+    sideGeo.setIndex(indices);
+  } else {
+    // Render mesh: built per-panel (the straight edge between profile corner i and i+1 of an
+    // n-gon), each panel with its own private pair of vertex columns rather than sharing corner
+    // vertices with its neighboring panel. That split matters because it lets the side surface use
+    // smooth per-vertex normals along height (removing the flat-shading Mach-band striping visible
+    // at high resolution — v1.14.2's slice-ring fix addressed a real but separate z-fighting issue,
+    // not this one) while keeping a genuine sharp edge at every real polygon corner, where the cross-
+    // section actually does have a crease. Normals are computed analytically rather than via
+    // Three.js's face-averaging computeVertexNormals(), since the earlier herringbone bug (v1.12.2)
+    // came from averaging across a per-quad diagonal choice that flips direction quad to quad —
+    // analytic normals don't depend on that triangulation choice at all.
+    const positions = [];
+    const normals = [];
+    const indices = [];
 
-  const sideGeo = new THREE.BufferGeometry();
-  sideGeo.setAttribute('position', new THREE.Float32BufferAttribute(positions, 3));
-  sideGeo.setAttribute('normal', new THREE.Float32BufferAttribute(normals, 3));
-  sideGeo.setIndex(indices);
+    for(let i=0;i<n;i++){
+      const iN = (i+1) % n;
+      const panelBase = positions.length / 3;
+      for(let j=0; j<=segs; j++){
+        const y = (j/segs) * height;
+        const left  = computeLayerPoint(mode, params, y, height, profile[i]);
+        const right = computeLayerPoint(mode, params, y, height, profile[iN]);
+
+        // Width tangent (∂S/∂u): exact, not approximated — a panel is a ruled straight-line surface
+        // between two corners at any given height, so its width-direction derivative is just the
+        // edge vector itself, constant along that edge.
+        const tw = [ right[0]-left[0], right[1]-left[1], right[2]-left[2] ];
+
+        // Height tangent (∂S/∂v) per column, central difference (one-sided at the two ends).
+        const yLo = Math.max(0, y-dY), yHi = Math.min(height, y+dY);
+        const denom = (yHi - yLo) || dY;
+        const lLo = computeLayerPoint(mode, params, yLo, height, profile[i]);
+        const lHi = computeLayerPoint(mode, params, yHi, height, profile[i]);
+        const tvL = [ (lHi[0]-lLo[0])/denom, (lHi[1]-lLo[1])/denom, (lHi[2]-lLo[2])/denom ];
+        const rLo = computeLayerPoint(mode, params, yLo, height, profile[iN]);
+        const rHi = computeLayerPoint(mode, params, yHi, height, profile[iN]);
+        const tvR = [ (rHi[0]-rLo[0])/denom, (rHi[1]-rLo[1])/denom, (rHi[2]-rLo[2])/denom ];
+
+        // Outward normal = tangent-height × tangent-width — this ordering (not the reverse) is what
+        // matches the outward-winding convention already established below and verified elsewhere in
+        // this file against a known-correct THREE.BoxGeometry reference (see the indices comment).
+        const nL = normalize3(cross3(tvL, tw));
+        const nR = normalize3(cross3(tvR, tw));
+
+        positions.push(left[0], left[1], left[2]);   normals.push(nL[0], nL[1], nL[2]);
+        positions.push(right[0], right[1], right[2]); normals.push(nR[0], nR[1], nR[2]);
+      }
+      for(let j=0;j<segs;j++){
+        const a = panelBase + j*2;        // left,  layer j
+        const b = panelBase + j*2 + 1;    // right, layer j
+        const c = panelBase + (j+1)*2 + 1;// right, layer j+1
+        const d = panelBase + (j+1)*2;    // left,  layer j+1
+        // Same shorter-diagonal-first split as before (purely cosmetic now that normals are analytic
+        // rather than face-derived, but kept for consistency); same outward winding too.
+        const dAC = distSqArr(positions,a,c), dBD = distSqArr(positions,b,d);
+        if(dAC <= dBD) indices.push(a,c,b, a,d,c);
+        else indices.push(a,d,b, b,d,c);
+      }
+    }
+
+    sideGeo = new THREE.BufferGeometry();
+    sideGeo.setAttribute('position', new THREE.Float32BufferAttribute(positions, 3));
+    sideGeo.setAttribute('normal', new THREE.Float32BufferAttribute(normals, 3));
+    sideGeo.setIndex(indices);
+  }
 
   // caps via shoelace-safe fan/earcut triangulation (handles the star's concave verts)
   const shapePts = profile.map(p => new THREE.Vector2(p[0], p[1]));
@@ -1609,16 +1716,46 @@ function buildDeformedGeometry(profile, height, segs, mode, params){
 // closed generator (circle, pipe) gets fan-triangulated disk caps at both open ends of the tube.
 // evalPoint(y, genPt) defaults to the ordinary radial-sweep formula (line/circle); pipe passes its
 // own Frenet-frame placement (pipeFrenetPoint) instead, through the same topology/winding/cap code.
+//
+// Normals are analytic per-vertex (v1.17.1), not Three.js's face-averaging computeVertexNormals() —
+// a user screenshot of the Line generator showed a dense fan of radiating lines across the ramp,
+// the same flat-shading Mach-band effect fixed for the other five modes in v1.14.3 but never applied
+// here (Helix's ramp panel, from axis to outer radius, is exactly the same kind of single wide panel
+// swept through many thin layers — 3 turns x 120 resolution here is 360 layers — that caused it
+// elsewhere). Unlike buildDeformedGeometry's polygon-corner panels, Helix's generator direction has
+// no real corners to preserve (Line is one continuous straight edge; Circle/Pipe's 24-gon is meant
+// to read as a smooth round tube, not a faceted polygon), so normals are shared/smooth across the
+// WHOLE generator direction here, not split per-panel — full smooth shading is the geometrically
+// honest choice for a swept generator, the same way flat panel-corners were the honest choice for a
+// polygonal footprint.
 function buildHelicalGeometry(genPts, closed, uSegs, height, params, evalPoint){
   const n = genPts.length;
   const evalFn = evalPoint || ((y, p) => computeLayerPoint('helix', params, y, height, p));
   const positions = [];
+  const normals = [];
   const indices = [];
+  const dY = Math.max(height/uSegs, 1e-5) * 0.5;
   for(let j=0; j<=uSegs; j++){
     const y = (j/uSegs) * height;
+    const yLo = Math.max(0, y-dY), yHi = Math.min(height, y+dY);
+    const denom = (yHi - yLo) || dY;
     for(let i=0;i<n;i++){
       const [x,yOut,z] = evalFn(y, genPts[i]);
       positions.push(x, yOut, z);
+      // Height/sweep tangent: finite difference of evalFn in y, holding the generator point fixed.
+      const pLo = evalFn(yLo, genPts[i]), pHi = evalFn(yHi, genPts[i]);
+      const tHeight = [ (pHi[0]-pLo[0])/denom, (pHi[1]-pLo[1])/denom, (pHi[2]-pLo[2])/denom ];
+      // Generator/circumference tangent: finite difference across neighboring generator SAMPLES
+      // (not infinitesimally close points — genPts are already discrete samples of the generator
+      // curve, spaced by 2π/n for Circle/Pipe or the single Line segment's own two endpoints for
+      // Line), central where possible and one-sided at the open ends of a non-closed generator.
+      const iPrev = closed ? (i-1+n)%n : Math.max(i-1, 0);
+      const iNext = closed ? (i+1)%n : Math.min(i+1, n-1);
+      const pPrev = evalFn(y, genPts[iPrev]), pNext = evalFn(y, genPts[iNext]);
+      const tGen = [ pNext[0]-pPrev[0], pNext[1]-pPrev[1], pNext[2]-pPrev[2] ];
+      // Orientation verified headlessly (Node + three.js) against Line, Circle, and Pipe.
+      const nrm = normalize3(cross3(tGen, tHeight));
+      normals.push(nrm[0], nrm[1], nrm[2]);
     }
   }
   function distSq(ia, ib){
@@ -1645,8 +1782,8 @@ function buildHelicalGeometry(genPts, closed, uSegs, height, params, evalPoint){
   }
   const sideGeo = new THREE.BufferGeometry();
   sideGeo.setAttribute('position', new THREE.Float32BufferAttribute(positions, 3));
+  sideGeo.setAttribute('normal', new THREE.Float32BufferAttribute(normals, 3));
   sideGeo.setIndex(indices);
-  sideGeo.computeVertexNormals();
 
   let capA = null, capB = null;
   if(closed){
@@ -1772,7 +1909,7 @@ function rebuild(){
     const modeForPoint = state.mode, paramsForPoint = params;
     layerPointFn = (y, p) => computeLayerPoint(modeForPoint, paramsForPoint, y, h, p);
     ({ sideGeo, bottomCap, topCap, layerPositions, segs, n } = buildDeformedGeometry(
-      profile, h, state.segments, state.mode, params
+      profile, h, state.segments, state.mode, params, !!PRESET_SMOOTH[state.preset]
     ));
   }
 
@@ -1785,10 +1922,11 @@ function rebuild(){
   // that flips direction quad to quad) can't recur, while also removing the flat-shaded Mach-band
   // striping that was visible as fine horizontal lines at high resolution — that striping was a
   // real, separate issue from the slice-ring z-fighting fixed earlier in v1.14.2, not the same bug.
-  // Helix still builds shared-vertex geometry (buildHelicalGeometry, unchanged), so it keeps flat
-  // shading to avoid reintroducing the herringbone pattern there.
+  // v1.17.1 extended the same analytic-normal treatment to Helix (buildHelicalGeometry) after a user
+  // screenshot showed the same Mach-band effect as a dense fan of radiating lines on the Line
+  // generator's ramp — so every mode now gets smooth shading, none of them flat.
   const material = new THREE.MeshStandardMaterial({
-    color: 0x7d92a0, metalness:0.05, roughness:0.65, flatShading: state.mode === 'helix',
+    color: 0x7d92a0, metalness:0.05, roughness:0.65, flatShading: false,
     side: THREE.DoubleSide, wireframe: state.overlays.wireframe
   });
   const capMaterial = new THREE.MeshStandardMaterial({

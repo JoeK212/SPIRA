@@ -72,11 +72,15 @@ turns × pitch), with a Metric/Imperial toggle that converts every readout (leng
 the HUD. A "floor lines" overlay shows the actual story lines (or, in Helix, turn boundaries); a
 separate "slice rings" overlay shows the computational resolution the surface is built from.
 
-**Cross-section sizing.** Each preset (square, triangle, hexagon, star) is generated at its own
-arbitrary proportions internally, then scaled — independently in width (x) and depth (z) — to real
-Width/Depth sliders in the Cross-section panel, so any preset can be sized in actual meters or feet
-instead of whatever proportions it happened to be coded with. Defaults reproduce the original square
-exactly.
+**Cross-section sizing.** Each preset (square, triangle, hexagon, octagon, ellipse, star) is
+generated at its own arbitrary proportions internally, then scaled — independently in width (x) and
+depth (z) — to real Width/Depth sliders in the Cross-section panel, so any preset can be sized in
+actual meters or feet instead of whatever proportions it happened to be coded with. Defaults
+reproduce the original square exactly. Every preset except Ellipse is a straight-edge polygon with
+real corners, rendered as private, sharp-cornered panels between each pair of corners; Ellipse has
+no real corners anywhere around its loop, so it's rendered instead with one shared, fully smooth
+normal field around the whole cross-section — the same distinction Helix's Circle/Pipe generator
+needed against its own Line generator.
 
 **Direct value entry.** Every slider's readout is also a click-to-type field: click it, type a
 number, Enter or blur commits, Escape cancels. Length fields (shear offsets, floor height, all Helix
