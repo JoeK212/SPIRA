@@ -1,9 +1,22 @@
 <!--
 SPIRA
-Interactive explorer of architectural deformation operations — twisting, tapering, and shearing — with a live solid and volume readout
+Interactive explorer of architectural deformation operations — twisting, tapering, shearing, and bending — with a live solid and volume readout
 Joe.K · axisbim.io
 
 CHANGELOG
+v1.5.0 - 2026-07-17 - Added Bend as a fourth operation (Fig. 13.15-13.16, radial bending): the axis
+         A maps to a circular arc A1 of radius R = h/β, chosen so the arc length exactly equals the
+         original axis length h (the book's "typical" equal-length convention), and each slice is
+         rearranged into the plane normal to that arc with local x passed straight through per
+         Fig. 13.15. This required a real architecture change: bend is the first operation where the
+         height coordinate itself moves (a tower bent 180° ends up beside its own base, not above
+         it), so computeLayerPoint() now returns a full [x,y,z] instead of [x,z] with y assumed
+         unchanged — twist/taper/shear were updated to just pass y through in the new signature.
+         The axis overlay's "moved axis" renderer (built for shear) now generalizes to draw bend's
+         curved A1 by sampling computeLayerPoint at the on-axis point, reusing the same dashed-A/
+         solid-A1 treatment. Verified the isometry claim (fixed-height slices only rotate+translate,
+         never scale, so volume is preserved like twist) both analytically and against a from-scratch
+         mesh-volume integration across all four presets and six bend angles before shipping.
 v1.4.0 - 2026-07-17 - Added Shear as a third operation (Fig. 13.11-13.14), the odd one out: every
          other operation here fixes the axis A, but shear moves it — each slice is translated
          within its own plane, linear from (0,0) at the base to (Δx,Δy) at the top, so the axis's
@@ -57,7 +70,7 @@ v1.0.0 - 2026-07-17 - Initial build. Twist operation on four cross-section prese
 <meta name="apple-mobile-web-app-capable" content="yes">
 <meta name="mobile-web-app-capable" content="yes">
 <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
-<meta name="description" content="Interactive explorer of architectural deformation operations — twisting, tapering, and shearing — with a live solid and volume readout.">
+<meta name="description" content="Interactive explorer of architectural deformation operations — twisting, tapering, shearing, and bending — with a live solid and volume readout.">
 <meta name="theme-color" content="#f4f1ea" id="themeColorMeta">
 <title>SPIRA — Deformation Geometry Explorer</title>
 <style>
@@ -253,10 +266,11 @@ v1.0.0 - 2026-07-17 - Initial build. Twist operation on four cross-section prese
   <aside>
     <section class="group">
       <h3>Operation</h3>
-      <div class="presets" id="modeGrid" style="grid-template-columns:1fr 1fr 1fr;">
+      <div class="presets" id="modeGrid">
         <button class="preset-btn active" data-mode="twist">Twist</button>
         <button class="preset-btn" data-mode="taper">Taper</button>
         <button class="preset-btn" data-mode="shear">Shear</button>
+        <button class="preset-btn" data-mode="bend">Bend</button>
       </div>
     </section>
 
@@ -299,6 +313,12 @@ v1.0.0 - 2026-07-17 - Initial build. Twist operation on four cross-section prese
         <div class="slider-row">
           <div class="top"><span>Δy (axis A₁ offset at top)</span><span class="val" id="shearDYVal">1.0 m</span></div>
           <input type="range" id="shearDYSlider" min="-8" max="8" step="0.1" value="1">
+        </div>
+      </div>
+      <div id="bendParamsBlock" style="display:none;">
+        <div class="slider-row">
+          <div class="top"><span>β_max (bend angle, axis A → arc A₁)</span><span class="val" id="bendBetaVal">180°</span></div>
+          <input type="range" id="bendBetaSlider" min="-360" max="360" step="1" value="180">
         </div>
       </div>
       <div class="slider-row">
@@ -370,7 +390,7 @@ v1.0.0 - 2026-07-17 - Initial build. Twist operation on four cross-section prese
 <script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
 <script src="https://cdn.jsdelivr.net/npm/three@0.128.0/examples/js/controls/OrbitControls.js"></script>
 <script>
-const APP_VERSION = '1.4.0';
+const APP_VERSION = '1.5.0';
 
 // ---------- toast ----------
 let toastTimer=null;
@@ -413,13 +433,14 @@ document.getElementById('footVersion').innerHTML =
 
 // ---------- state ----------
 const state = {
-  mode: 'twist',          // 'twist' | 'taper' | 'shear'
+  mode: 'twist',          // 'twist' | 'taper' | 'shear' | 'bend'
   preset: 'square',
   alphaMax: 120,
   taperV: 0.5,             // x-direction scale factor at top plane T (book notation v)
   taperW: 0.5,             // y-direction scale factor at top plane T (book notation w)
   shearDXM: 3.0,           // x-offset of axis A1 at top plane, always stored in meters
   shearDYM: 1.0,           // y-offset of axis A1 at top plane, always stored in meters
+  bendBetaMax: 180,        // total bend angle in degrees; axis A maps to an arc A1 of this sweep
   units: 'metric',       // 'metric' | 'imperial' — display only; geometry is always stored in meters
   floors: 8,
   floorHeightM: 3.5,     // floor-to-floor height, always stored in meters regardless of display units
@@ -476,22 +497,39 @@ function rotate2D(p, rad){
   return [ p[0]*c - p[1]*s, p[0]*s + p[1]*c ];
 }
 
-// Maps a base-plane profile point to its position at height y, for any of the three operations.
-// Twist rotates each slice by α(z) = (z/h)·α_max; taper scales each slice independently in x
-// (factor v(z)) and y (factor w(z)), both linear between 1 at the base and v/w at the top; shear
-// translates each slice within its own plane, linear between (0,0) at the base and (Δx,Δy) at the
-// top — the simplest case from the book, where the image A1 of the axis is a straight line.
+// Maps a base-plane profile point to its full 3D position at parameter y, for any of the four
+// operations. Twist rotates each slice by α(z) = (z/h)·α_max; taper scales each slice independently
+// in x (factor v(z)) and y (factor w(z)), both linear between 1 at the base and v/w at the top;
+// shear translates each slice within its own plane, linear between (0,0) at the base and (Δx,Δy) at
+// the top. All three keep the slice at world height y unchanged — only bend moves the height
+// coordinate itself, which is why this returns a full [x,y,z] rather than just [x,z]: bend maps the
+// axis to a circular arc A1 (radius R = h/β, so the arc length exactly equals h — the book's
+// "typical" equal-length convention) and rearranges each slice into the plane normal to that arc,
+// with the profile's local x passed straight through (Fig. 13.15's "x-parallel lines stay
+// x-parallel") and local z (here playing the book's radial-offset "y") riding the arc's normal.
+// For a fixed y this in-slice map is a pure rotation+translation (an isometry — same area, exactly
+// like twist), which is what makes bending volume-preserving too.
 function computeLayerPoint(mode, params, y, h, p){
   if(mode === 'taper'){
     const vFac = 1 + (y/h) * (params.V - 1);
     const wFac = 1 + (y/h) * (params.W - 1);
-    return [ p[0]*vFac, p[1]*wFac ];
+    return [ p[0]*vFac, y, p[1]*wFac ];
   }
   if(mode === 'shear'){
-    return [ p[0] + params.DX * (y/h), p[1] + params.DY * (y/h) ];
+    return [ p[0] + params.DX * (y/h), y, p[1] + params.DY * (y/h) ];
+  }
+  if(mode === 'bend'){
+    const betaRad = params.betaMax * Math.PI/180;
+    if(Math.abs(betaRad) < 1e-6) return [ p[0], y, p[1] ]; // straight fallback, avoids 0/0 at R=h/beta
+    const R = h/betaRad;
+    const theta = betaRad * (y/h);
+    const worldY = (R - p[1]) * Math.sin(theta);
+    const worldZ = R*(1 - Math.cos(theta)) + p[1]*Math.cos(theta);
+    return [ p[0], worldY, worldZ ];
   }
   const angleDeg = (y/h) * params.alphaMax;
-  return rotate2D(p, angleDeg * Math.PI/180);
+  const [x,z] = rotate2D(p, angleDeg * Math.PI/180);
+  return [x, y, z];
 }
 
 // ---------- units ----------
@@ -502,9 +540,10 @@ function toDisplayArea(m2){ return state.units==='metric' ? m2 : m2*M_TO_FT*M_TO
 function toDisplayVol(m3){ return state.units==='metric' ? m3 : m3*M_TO_FT*M_TO_FT*M_TO_FT; }
 function totalHeightM(){ return state.floors * state.floorHeightM; }
 
-// Twist and shear never change a slice's area (rotation and translation are both exact isometries
-// of the plane), so deformed volume == prism volume exactly, by Cavalieri. Taper scales each
-// slice's area by v(z)*w(z), a quadratic in z, so the volume ratio has a closed form:
+// Twist, shear, and bend never change a slice's area — rotation, translation, and (per-slice, at
+// fixed height) rotation+translation again are all exact isometries of the plane — so deformed
+// volume == prism volume exactly, by Cavalieri. Taper scales each slice's area by v(z)*w(z), a
+// quadratic in z, so the volume ratio has a closed form:
 // baseArea * h * [1 + (V+W-2)/2 + (V-1)(W-1)/3] (integral of v(z)w(z) dz worked out by hand).
 function computeDeformedVolume(mode, params, baseArea, h){
   if(mode === 'taper'){
@@ -561,8 +600,8 @@ function buildDeformedGeometry(profile, height, segs, mode, params){
   for(let j=0; j<=segs; j++){
     const y = (j/segs) * height;
     for(let i=0;i<n;i++){
-      const [x,z] = computeLayerPoint(mode, params, y, height, profile[i]);
-      positions.push(x, y, z);
+      const [x,yOut,z] = computeLayerPoint(mode, params, y, height, profile[i]);
+      positions.push(x, yOut, z);
     }
   }
   function distSq(ia, ib){
@@ -600,8 +639,8 @@ function buildDeformedGeometry(profile, height, segs, mode, params){
   function buildCap(y, flip){
     const capPos = [];
     profile.forEach(p=>{
-      const [x,z] = computeLayerPoint(mode, params, y, height, p);
-      capPos.push(x, y, z);
+      const [x,yOut,z] = computeLayerPoint(mode, params, y, height, p);
+      capPos.push(x, yOut, z);
     });
     const capIdx = [];
     triangles.forEach(tri=>{
@@ -652,6 +691,7 @@ function rebuild(){
   const profile = PROFILES[state.preset]();
   const params = state.mode === 'taper' ? { V: state.taperV, W: state.taperW }
     : state.mode === 'shear' ? { DX: state.shearDXM, DY: state.shearDYM }
+    : state.mode === 'bend' ? { betaMax: state.bendBetaMax }
     : { alphaMax: state.alphaMax };
   const { sideGeo, bottomCap, topCap, layerPositions, segs, n } = buildDeformedGeometry(
     profile, h, state.segments, state.mode, params
@@ -712,19 +752,20 @@ function rebuild(){
     for(let k=0; k<=state.floors; k++){
       const y = k * state.floorHeightM;
       const pts = [];
-      profile.forEach(p=>{ const [x,z] = computeLayerPoint(state.mode, params, y, h, p); pts.push(new THREE.Vector3(x, y, z)); });
+      profile.forEach(p=>{ const [x,yOut,z] = computeLayerPoint(state.mode, params, y, h, p); pts.push(new THREE.Vector3(x, yOut, z)); });
       pts.push(pts[0].clone());
       const floorGeo = new THREE.BufferGeometry().setFromPoints(pts);
       overlayGroup.add(new THREE.Line(floorGeo, floorMat));
     }
   }
 
-  // axis A — shear is the one operation that moves the axis itself (A1 ≠ A), so it gets its own
-  // rendering: the original A stays as a faint dashed reference, A1 (solid, brick) shows where it
-  // actually went. Twist and taper fix the axis, so they just get the single solid line.
+  // axis A — shear and bend are the two operations that move the axis itself (A1 ≠ A), so they
+  // get a shared "moved axis" rendering: the original A stays as a faint dashed reference, A1
+  // (solid, brick) shows where it actually went — a straight line for shear, a sampled curve for
+  // bend's circular arc. Twist and taper fix the axis, so they just get the single solid line.
   if(state.overlays.axis){
     const axisTop = h * 1.35;
-    if(state.mode === 'shear'){
+    if(state.mode === 'shear' || state.mode === 'bend'){
       const aGeo = new THREE.BufferGeometry().setFromPoints([
         new THREE.Vector3(0,0,0), new THREE.Vector3(0, axisTop, 0)
       ]);
@@ -733,19 +774,28 @@ function rebuild(){
       aLine.computeLineDistances();
       overlayGroup.add(aLine);
 
-      const topDX = params.DX * 1.35, topDY = params.DY * 1.35;
-      const a1Geo = new THREE.BufferGeometry().setFromPoints([
-        new THREE.Vector3(0,0,0), new THREE.Vector3(topDX, axisTop, topDY)
-      ]);
+      // A1: for shear this is exactly 2 points (it's provably straight); for bend, sample the
+      // curve — computeLayerPoint at the on-axis point [0,0] gives A1 for any mode generically.
+      const sampleCount = state.mode === 'bend' ? 48 : 1;
+      const a1Points = [];
+      for(let k=0; k<=sampleCount; k++){
+        const y = (k/sampleCount) * axisTop;
+        const [ax,ay,az] = computeLayerPoint(state.mode, params, y, h, [0,0]);
+        a1Points.push(new THREE.Vector3(ax, ay, az));
+      }
+      const a1Geo = new THREE.BufferGeometry().setFromPoints(a1Points);
       const a1Mat = new THREE.LineBasicMaterial({ color: 0x9c3226 });
       overlayGroup.add(new THREE.Line(a1Geo, a1Mat));
+
+      const tip = a1Points[a1Points.length-1];
+      const prev = a1Points[a1Points.length-2];
+      const tipDir = new THREE.Vector3().subVectors(tip, prev).normalize();
       const cone = new THREE.Mesh(
         new THREE.ConeGeometry(0.09, 0.3, 12),
         new THREE.MeshBasicMaterial({ color: 0x9c3226 })
       );
-      const a1Dir = new THREE.Vector3(topDX, axisTop, topDY).normalize();
-      cone.quaternion.setFromUnitVectors(new THREE.Vector3(0,1,0), a1Dir);
-      cone.position.set(topDX, axisTop, topDY);
+      cone.quaternion.setFromUnitVectors(new THREE.Vector3(0,1,0), tipDir);
+      cone.position.copy(tip);
       overlayGroup.add(cone);
     } else {
       const axisGeo = new THREE.BufferGeometry().setFromPoints([
@@ -787,9 +837,9 @@ function rebuild(){
       bLabel.position.set(bp[0]*1.12, 0.25, bp[1]*1.12);
       overlayGroup.add(bLabel);
 
-      const [tx,tz] = computeLayerPoint(state.mode, params, h, h, profile[i]);
+      const [tx,tyOut,tz] = computeLayerPoint(state.mode, params, h, h, profile[i]);
       const tLabel = spriteLabel(names[i]+'₁', '#b23a2e');
-      tLabel.position.set(tx*1.12, h+0.25, tz*1.12);
+      tLabel.position.set(tx*1.12, tyOut+0.25, tz*1.12);
       overlayGroup.add(tLabel);
     }
   }
@@ -810,6 +860,13 @@ function rebuild(){
     document.getElementById('hudParam1').textContent = toDisplayLen(state.shearDXM).toFixed(1) + ' ' + u.len;
     document.getElementById('hudParam2Label').textContent = 'Δy @ top';
     document.getElementById('hudParam2').textContent = toDisplayLen(state.shearDYM).toFixed(1) + ' ' + u.len;
+  } else if(state.mode === 'bend'){
+    const betaRad = state.bendBetaMax * Math.PI/180;
+    const R = Math.abs(betaRad) < 1e-6 ? Infinity : h/betaRad;
+    document.getElementById('hudParam1Label').textContent = 'β_max';
+    document.getElementById('hudParam1').textContent = state.bendBetaMax.toFixed(0) + '°';
+    document.getElementById('hudParam2Label').textContent = 'radius R (h/β)';
+    document.getElementById('hudParam2').textContent = Number.isFinite(R) ? toDisplayLen(Math.abs(R)).toFixed(1) + ' ' + u.len : '∞ (straight)';
   } else {
     document.getElementById('hudParam1Label').textContent = 'α_max';
     document.getElementById('hudParam1').textContent = state.alphaMax.toFixed(0) + '°';
@@ -834,6 +891,8 @@ function rebuild(){
     ? `Taper v${state.taperV.toFixed(2)} w${state.taperW.toFixed(2)}`
     : state.mode === 'shear'
     ? `Shear Δx${toDisplayLen(state.shearDXM).toFixed(1)}${u.len} Δy${toDisplayLen(state.shearDYM).toFixed(1)}${u.len}`
+    : state.mode === 'bend'
+    ? `Bend β_max ${state.bendBetaMax}°`
     : `Twist α_max ${state.alphaMax}°`;
   document.getElementById('footRight').textContent =
     `${PRESET_LABELS[state.preset]} · ${paramSummary} · ${state.floors} floors · h ${toDisplayLen(h).toFixed(1)}${u.len} · ${state.segments} slices`;
@@ -861,12 +920,14 @@ const taperVSlider = document.getElementById('taperVSlider');
 const taperWSlider = document.getElementById('taperWSlider');
 const shearDXSlider = document.getElementById('shearDXSlider');
 const shearDYSlider = document.getElementById('shearDYSlider');
+const bendBetaSlider = document.getElementById('bendBetaSlider');
 const floorsSlider = document.getElementById('floorsSlider');
 const floorHeightSlider = document.getElementById('floorHeightSlider');
 const resSlider = document.getElementById('resSlider');
 alphaSlider.value = state.alphaMax;
 taperVSlider.value = state.taperV;
 taperWSlider.value = state.taperW;
+bendBetaSlider.value = state.bendBetaMax;
 floorsSlider.value = state.floors;
 resSlider.value = state.segments;
 
@@ -886,19 +947,28 @@ const REFERENCE_TEXT = {
     plane, linear from (0,0) at the base to (Δx,Δy) at the top, so the axis's image A₁ (shown in
     brick) is a straight line leaning away from the original A (shown dashed). Because a translation
     never changes a slice's shape or area, shear is exactly volume-preserving, same as twist — the
-    two vases in Fig. 13.14 hold the same water.`
+    two vases in Fig. 13.14 hold the same water.`,
+  bend: `This is Fig. 13.15's radial bending: base plane B stays fixed, and — like shear — the axis A
+    moves, but this time to a circular arc A₁ (radius R = h/β, so the arc is exactly as long as the
+    original axis segment h). Each slice is rearranged into the plane normal to that arc, with the
+    profile's local x carried straight through (Fig. 13.15's "x-parallel lines stay x-parallel") —
+    it's really a 2D bend in the yz-plane, extended along x. Because each slice only rotates and
+    translates, never scales, bending is volume-preserving too. Try β_max = 180° for a full
+    U-shaped bend, or push toward 360° to watch it curl back on itself.`
 };
 const FORMULA_HTML = {
   twist: 'α(z) = (z/h)·α<sub>max</sub>',
   taper: 'v(z)=1+z(v−1)/h, w(z)=1+z(w−1)/h',
-  shear: 'x₁=x+Δx·(z/h), y₁=y+Δy·(z/h)'
+  shear: 'x₁=x+Δx·(z/h), y₁=y+Δy·(z/h)',
+  bend: 'R=h/β, θ(z)=β·(z/h)'
 };
 const HUD_FORMULA_HTML = {
   twist: 'α(z) = (z / h) · α<sub>max</sub>',
   taper: 'v(z) = 1 + z·(v−1)/h',
-  shear: 'x₁ = x + Δx·(z/h)'
+  shear: 'x₁ = x + Δx·(z/h)',
+  bend: 'θ(z) = β · (z/h), R = h/β'
 };
-const TAGLINES = { twist: 'twist deformation, live', taper: 'taper deformation, live', shear: 'shear deformation, live' };
+const TAGLINES = { twist: 'twist deformation, live', taper: 'taper deformation, live', shear: 'shear deformation, live', bend: 'bend deformation, live' };
 
 const modeGrid = document.getElementById('modeGrid');
 function applyModeChrome(){
@@ -909,6 +979,7 @@ function applyModeChrome(){
   document.getElementById('twistParamsBlock').style.display = state.mode === 'twist' ? '' : 'none';
   document.getElementById('taperParamsBlock').style.display = state.mode === 'taper' ? '' : 'none';
   document.getElementById('shearParamsBlock').style.display = state.mode === 'shear' ? '' : 'none';
+  document.getElementById('bendParamsBlock').style.display = state.mode === 'bend' ? '' : 'none';
   [...modeGrid.children].forEach(b=>b.classList.toggle('active', b.dataset.mode === state.mode));
 }
 [...modeGrid.children].forEach(btn=>{
@@ -968,6 +1039,7 @@ function syncSliderLabels(){
   document.getElementById('taperWVal').textContent = state.taperW.toFixed(2);
   document.getElementById('shearDXVal').textContent = toDisplayLen(state.shearDXM).toFixed(1) + ' ' + u.len;
   document.getElementById('shearDYVal').textContent = toDisplayLen(state.shearDYM).toFixed(1) + ' ' + u.len;
+  document.getElementById('bendBetaVal').textContent = state.bendBetaMax + '°';
   document.getElementById('floorsVal').textContent = state.floors;
   document.getElementById('floorHeightVal').textContent = toDisplayLen(state.floorHeightM).toFixed(1) + ' ' + u.len;
   document.getElementById('resVal').textContent = state.segments;
@@ -996,6 +1068,10 @@ shearDXSlider.addEventListener('input', e=>{
 shearDYSlider.addEventListener('input', e=>{
   const v = parseFloat(e.target.value);
   state.shearDYM = state.units === 'metric' ? v : v / M_TO_FT;
+  syncSliderLabels(); persist(); rebuild();
+});
+bendBetaSlider.addEventListener('input', e=>{
+  state.bendBetaMax = parseFloat(e.target.value);
   syncSliderLabels(); persist(); rebuild();
 });
 floorsSlider.addEventListener('input', e=>{
