@@ -15,7 +15,9 @@ size is an illustrative estimate (the UI says so).
 x (factor v(z)) and y (factor w(z)), linear from 1 at the base to user-set v, w at the top. Despite
 looking linear, it isn't — a line not parallel or orthogonal to A maps to a parabola as it scales —
 and unlike twisting, it does *not* preserve volume, which is the deliberate pedagogical contrast
-with twist.
+with twist. A case study loads **The Shard** (Renzo Piano, London, 2012 — 309.6m, 95 floors, tapers
+to a near-point); height/floors are sourced, but no published base/top footprint ratio was found, so
+the taper amount is an illustrative estimate, like every case study's footprint size.
 
 **Shear** — the first of two operations where the axis A doesn't stay fixed. Each slice is
 translated within its own plane, linear from (0,0) at the base to (Δx,Δy) at the top, so the axis's
