@@ -4,6 +4,13 @@ Interactive explorer of architectural deformation operations — twisting, taper
 Joe.K · axisbim.io
 
 CHANGELOG
+v1.12.1 - 2026-07-18 - Rewrote all six Reference panels (and two leftover HUD strings for Helix)
+         to drop every figure/page citation ("Fig. 13.3-13.6", "p.456", etc.) — user reported the
+         numbers don't correspond to anything real. Each panel now explains the operation
+         self-contained, grounded directly in the formula already shown in the header badge, rather
+         than pointing to an external page nobody can check. Also fixed the static HTML placeholder
+         under #referenceText (the pre-JS fallback shown for an instant before applyModeChrome()
+         runs) which still had the old citation-laden Twist text.
 v1.12.0 - 2026-07-18 - Two cleanup items. (1) Added a "?" help modal (header button) covering the
          app's own controls — operations, editing values, Free's viewport handles, overlays, view
          navigation, units, export — kept deliberately separate from the sidebar's Reference panel,
@@ -699,10 +706,10 @@ v1.0.0 - 2026-07-17 - Initial build. Twist operation on four cross-section prese
     <section class="group">
       <h3>Reference</h3>
       <div style="font-size:0.76rem; line-height:1.6; color:var(--muted);" id="referenceText">
-        This is Fig. 13.3–13.6's twist operation: a fixed base plane B, a vertical axis A, and every
-        horizontal slice at height z rotated by α(z). Straight vertical edges become helices; a flat
-        wall through A becomes a helicoid. Try α_max = 90° and 180° to reproduce the two right-hand
-        figures on p.456, or push past 360° to see multiple full turns like the Turning Torso.
+        Twist keeps a base plane B and a vertical axis A fixed, and rotates every horizontal slice
+        at height z by α(z) = (z/h)·α_max. Straight vertical edges become helices; a flat wall
+        through the axis becomes a helicoid. Try α_max = 90° or 180° to see a quarter or half turn,
+        or push past 360° for multiple full turns.
       </div>
     </section>
   </aside>
@@ -718,7 +725,7 @@ v1.0.0 - 2026-07-17 - Initial build. Twist operation on four cross-section prese
 <script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
 <script src="https://cdn.jsdelivr.net/npm/three@0.128.0/examples/js/controls/OrbitControls.js"></script>
 <script>
-const APP_VERSION = '1.12.0';
+const APP_VERSION = '1.12.1';
 
 // ---------- toast ----------
 let toastTimer=null;
@@ -1700,8 +1707,8 @@ function rebuild(){
 
     const matchEl = document.getElementById('hudMatch');
     matchEl.textContent = state.helixGenerator === 'line'
-      ? 'common helicoid — open ruled surface, Fig. 9.56 (no volume to preserve)'
-      : 'circle swept in the meridian plane — winding tube, Fig. 9.55';
+      ? 'common helicoid — open ruled surface (no volume to preserve)'
+      : 'circle swept in the meridian plane — winding tube';
   } else {
     document.getElementById('hudAreaLabel').textContent = 'base area';
     document.getElementById('hudVolTwistLabel').textContent = 'deformed volume';
@@ -1818,45 +1825,45 @@ resSlider.value = state.segments;
 helixTurnsSlider.value = state.helixTurns;
 
 const REFERENCE_TEXT = {
-  twist: `This is Fig. 13.3–13.6's twist operation: a fixed base plane B, a vertical axis A, and every
-    horizontal slice at height z rotated by α(z). Straight vertical edges become helices; a flat
-    wall through A becomes a helicoid. Try α_max = 90° and 180° to reproduce the two right-hand
-    figures on p.456, or push past 360° to see multiple full turns like the Turning Torso.`,
-  taper: `This is Fig. 13.7's tapering operation: base plane B and axis A stay fixed, and each slice is
-    scaled independently — factor v(z) in x, w(z) in y — linear from 1 at the base to v, w at the
-    top. It looks linear but isn't: per Fig. 13.8, a line that isn't parallel or orthogonal to A
-    maps to a parabola, not a straight line — only the profile's own vertical edges (parallel to A)
-    stay straight. And unlike twisting, tapering does not preserve volume: try v = w = 0.5 for a
-    simple frustum, or set v and w apart for an asymmetric taper.`,
-  shear: `This is Fig. 13.11–13.14's shear deformation: base plane B stays fixed, but — unlike every
-    other operation here — the axis A does NOT: each slice is simply translated within its own
-    plane, linear from (0,0) at the base to (Δx,Δy) at the top, so the axis's image A₁ (shown in
-    brick) is a straight line leaning away from the original A (shown dashed). Because a translation
-    never changes a slice's shape or area, shear is exactly volume-preserving, same as twist — the
-    two vases in Fig. 13.14 hold the same water.`,
-  bend: `This is Fig. 13.15's radial bending: base plane B stays fixed, and — like shear — the axis A
-    moves, but this time to a circular arc A₁ (radius R = h/β, so the arc is exactly as long as the
-    original axis segment h). Each slice is rearranged into the plane normal to that arc, with the
-    profile's local x carried straight through (Fig. 13.15's "x-parallel lines stay x-parallel") —
-    it's really a 2D bend in the yz-plane, extended along x. Because each slice only rotates and
-    translates, never scales, bending is volume-preserving too. Try β_max = 180° for a full
-    U-shaped bend, or push toward 360° to watch it curl back on itself.`,
-  ffd: `This is Fig. 13.17–13.20's freeform deformation: unlike every other operation here, there's
-    no axis and no fixed base plane — the whole solid sits inside a cuboid with 8 control points at
-    its corners, and every point inside is a trilinear (1,1,1) Bézier blend of all 8. Drag any brick
-    handle in the viewport. Per Fig. 13.18, this looks linear but isn't: straight lines not parallel
-    to an edge become cubic curves, and it generally changes volume however it likes — there's no
-    Cavalieri argument here the way there was for twist, shear, and bend.`,
-  helix: `This is ch.9's helical surfaces (Fig. 9.53–9.60) — a different construction from the other
-    five, which all deform a solid. Here a generator curve is swept by true helical motion: rotate by
-    u about axis A while translating p·u along it (x=X(v)cosu, z=X(v)sinu, y=Y(v)+p·u). "Line" is the
-    common/right helicoid (Fig. 9.56–9.57): a straight segment orthogonal to A, the classic open
-    spiral ramp or staircase (Fig. 9.60's photo) — try a small inner radius for a central newel void.
-    "Circle" places a circle flat in the meridian plane (Fig. 9.55, middle): a winding tube or screw
-    column. The book's third variant — a circle held orthogonal to the helix's own tangent (Fig. 9.55,
-    bottom), the true constant-radius pipe — needs a moving Frenet frame along the 3D helix and isn't
-    modeled here. Because a helicoid isn't a solid (the common one has a hole around the axis and zero
-    thickness), there's no volume to report — the HUD shows surface area instead.`
+  twist: `Twist keeps a base plane B and a vertical axis A fixed, and rotates every horizontal slice at
+    height z by α(z) = (z/h)·α_max — a linear ramp from 0° at the base to α_max at the top. Straight
+    vertical edges become helices, since each one traces a rotating radius as it rises; a flat wall
+    through the axis becomes a helicoid, the same ruled surface behind twisted towers like the
+    Turning Torso. Try α_max = 90° or 180° to see a quarter or half turn, or push past 360° for
+    multiple full turns.`,
+  taper: `Taper also keeps base plane B and axis A fixed, but scales each slice instead of rotating
+    it — independently, by v(z) in x and w(z) in y, both ramping linearly from 1 at the base to v, w
+    at the top. It looks like it should stay linear, but a line that isn't parallel or perpendicular
+    to the axis actually traces a parabola as it scales; only the profile's own vertical edges stay
+    straight. And unlike twisting, tapering does not preserve volume: try v = w = 0.5 for a simple
+    frustum, or set v and w apart for an asymmetric taper.`,
+  shear: `Shear is the only operation here where the axis itself moves: base plane B stays fixed, but
+    each slice is simply translated within its own horizontal plane, linear from (0,0) at the base
+    to (Δx,Δy) at the top — so the axis's image A₁ (shown in brick) leans away from the original A
+    (shown dashed). Because a translation never changes a slice's shape or area, shear preserves
+    volume exactly, the same as twist.`,
+  bend: `Bend also moves the axis, but to a circular arc A₁ instead of a straight line — radius
+    R = h/β, chosen so the arc is exactly as long as the original axis segment h. Each slice rotates
+    and translates into the plane normal to that arc, with the profile's local x carried straight
+    through, so it's really a 2D bend extended along x. Because each slice only rotates and
+    translates, never scales, bending preserves volume too. Try β_max = 180° for a full U-shaped
+    bend, or push toward 360° to watch it curl back on itself.`,
+  ffd: `Free is the odd one out: unlike every other operation here, there's no axis and no fixed base
+    plane at all — the whole solid sits inside a cuboid with 8 control points at its corners, and
+    every point inside is a trilinear (1,1,1) Bézier blend of all 8. Drag any brick handle in the
+    viewport to reshape it live. This looks like it should stay linear too, but a straight line not
+    parallel to an edge becomes a cubic curve, and volume changes however the control points move —
+    there's no guarantee of preservation the way there is for twist, shear, and bend.`,
+  helix: `Helix is a different construction from the other five, which all deform a solid — here a
+    generator curve is swept by true helical motion: rotate by u about axis A while translating p·u
+    along it (x=X(v)cosu, z=X(v)sinu, y=Y(v)+p·u). "Line" sweeps a straight segment orthogonal to A —
+    the common/right helicoid, the classic open spiral ramp or staircase — try a small inner radius
+    for a central newel void. "Circle" sweeps a circle lying flat in the meridian plane, producing a
+    winding tube or screw column. A third variant — a circle held orthogonal to the helix's own
+    tangent, giving a true constant-radius pipe — would need a moving Frenet frame along the 3D helix
+    and isn't modeled here. Because a helicoid isn't a solid (the line generator in particular leaves
+    a hole around the axis with zero thickness), there's no volume to report — the HUD shows surface
+    area instead.`
 };
 const FORMULA_HTML = {
   twist: 'α(z) = (z/h)·α<sub>max</sub>',
