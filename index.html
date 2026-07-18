@@ -4,6 +4,30 @@ Interactive explorer of architectural deformation operations — twisting, taper
 Joe.K · axisbim.io
 
 CHANGELOG
+v1.19.1 - 2026-07-18 - Fixed The Shard's taper — user screenshot showed a needle-thin spike with no
+         resemblance to the real building ("very big spire that does not exist"). The v1.19.0
+         estimate (taperV=taperW=0.15) was wrong, not just imprecise: SPIRA's Taper is a single
+         LINEAR taper across the whole height, but the real Shard stays visibly broad through most
+         of its height and only narrows sharply in its top ~15 (largely unoccupied, structural)
+         floors of ~95 — forcing a linear taper to reach 0.15x width at the top spreads that
+         narrowing across the entire building instead of concentrating it near the top the way the
+         actual silhouette does. Revised to 0.4, a considerably blunter, more visually plausible
+         compromise for what a single linear taper can represent — still an estimate, not a sourced
+         ratio, same as before.
+v1.19.0 - 2026-07-18 - Added The Shard (Renzo Piano, London, 2012 — 309.6m, 95 floors, tapers to a
+         near-point) as a case study for Taper, first case study outside Twist/Shear. Height and
+         floor count are sourced (Wikipedia, Skyscraper Center, WSP's own engineering write-up); the
+         taper amount itself (V=W=0.15) is NOT — no published base-width/top-width ratio was found
+         despite several searches, so it's an illustrative estimate matching the building's famous
+         silhouette, same category as every case study's footprint size. Investigated two other
+         candidates from the same research pass and declined both for now rather than force a fit:
+         Lotte World Tower's own architects (KPF) describe its taper as "a continuous curve"
+         (inspired by celadon pottery), not the straight-line taper SPIRA's Taper mode models — a
+         real geometric mismatch, the same category of problem that ruled out The Bow for Bend, not
+         just an unsourced parameter; 20 Fenchurch Street ("Walkie-Talkie") would be an interesting
+         flare-instead-of-taper example (SPIRA's V/W already support >1 scale factors) but its
+         profile is described the same way as Lotte's — curved, not straight — and no numeric
+         base/top ratio was found either. Bumped the floors slider max 80->100 to fit The Shard's 95.
 v1.18.0 - 2026-07-18 - Added Octagon and Ellipse cross-section presets (user's request for more
          realistic footprint shapes alongside Star, which stays — "fun to play with" per the user,
          just no longer the only non-rectilinear option). Octagon is a straight-edge n-gon, same
@@ -764,6 +788,14 @@ v1.0.0 - 2026-07-17 - Initial build. Twist operation on four cross-section prese
           <input type="range" id="taperWSlider" min="0.1" max="3" step="0.05" value="0.5">
         </div>
         <button class="btn secondary reset-btn" data-resetmode="taper" style="width:100%; margin-top:6px;">Reset values</button>
+        <div style="font-size:0.78rem; color:var(--muted); margin:14px 0 8px;">
+          Case study (real tapering building)
+        </div>
+        <button class="btn secondary" data-casestudy="theshard" style="width:100%; font-size:0.74rem;">The Shard</button>
+        <div style="font-size:0.68rem; color:var(--muted); line-height:1.4; margin-top:4px;">
+          Height and floor count are sourced; no published base/top footprint ratio was found, so the
+          taper amount and footprint size are illustrative estimates matching its famous silhouette.
+        </div>
       </div>
       <div id="shearParamsBlock" style="display:none;">
         <div class="slider-row">
@@ -833,7 +865,7 @@ v1.0.0 - 2026-07-17 - Initial build. Twist operation on four cross-section prese
       <div id="commonHeightBlock">
         <div class="slider-row">
           <div class="top"><span>floors</span><span class="val" id="floorsVal">8</span></div>
-          <input type="range" id="floorsSlider" min="1" max="80" step="1" value="8">
+          <input type="range" id="floorsSlider" min="1" max="100" step="1" value="8">
         </div>
         <div class="slider-row">
           <div class="top"><span>floor-to-floor height</span><span class="val" id="floorHeightVal">3.5 m</span></div>
@@ -938,7 +970,7 @@ v1.0.0 - 2026-07-17 - Initial build. Twist operation on four cross-section prese
 <script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
 <script src="https://cdn.jsdelivr.net/npm/three@0.128.0/examples/js/controls/OrbitControls.js"></script>
 <script>
-const APP_VERSION = '1.18.0';
+const APP_VERSION = '1.19.1';
 
 // ---------- toast ----------
 let toastTimer=null;
@@ -2709,6 +2741,22 @@ const CASE_STUDIES = {
     // linear shear is a simplification of the real, non-uniform lean profile, not a literal match.
     fields: { preset:'square', shearDXM: -(160*Math.tan(18*Math.PI/180)), shearDYM:0, floors:35, floorHeightM:160/35, footprintWidthM:25, footprintDepthM:25 },
     toast: 'Capital Gate — 160m, 35 floors, 18° lean (RMJM, Abu Dhabi, 2011)'
+  },
+  theshard: {
+    mode: 'taper', label: 'The Shard',
+    // Height and floor count are sourced (Wikipedia, Skyscraper Center, WSP's own engineering
+    // write-up); taperV/taperW are NOT — no published base-width/top-width ratio was found despite
+    // several searches, so this is an illustrative estimate, not a sourced figure. v1.19.1: the
+    // first estimate (0.15) was wrong, not just imprecise — a user screenshot showed a needle-thin
+    // spike with no resemblance to the real building ("very big spire that does not exist"). The
+    // actual Shard stays visibly broad through most of its height and only narrows sharply in the
+    // top ~15 (largely unoccupied, structural) floors of its ~95 — a single LINEAR taper across the
+    // WHOLE height forced to reach 0.15x width at the top exaggerates that narrowing across the
+    // entire building instead of concentrating it near the top the way the real silhouette does.
+    // 0.4 is a considerably blunter, more visually plausible compromise for a single linear taper;
+    // still an estimate, not a sourced ratio.
+    fields: { preset:'square', taperV:0.4, taperW:0.4, floors:95, floorHeightM:309.6/95, footprintWidthM:28, footprintDepthM:28 },
+    toast: 'The Shard — 309.6m, 95 floors, tapers to a near-point (Piano, London, 2012)'
   }
 };
 function loadCaseStudy(key){
@@ -2721,6 +2769,8 @@ function loadCaseStudy(key){
   // Sliders belonging to modes other than cs.mode are harmless to update even while hidden.
   [...presetGrid.children].forEach(c=>c.classList.toggle('active', c.dataset.preset === state.preset));
   alphaSlider.value = state.alphaMax;
+  taperVSlider.value = state.taperV;
+  taperWSlider.value = state.taperW;
   shearDXSlider.value = state.shearDXM;
   shearDYSlider.value = state.shearDYM;
   floorsSlider.value = state.floors;
