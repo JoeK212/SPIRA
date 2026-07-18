@@ -64,6 +64,25 @@ turns × pitch), with a Metric/Imperial toggle that converts every readout (leng
 the HUD. A "floor lines" overlay shows the actual story lines (or, in Helix, turn boundaries); a
 separate "slice rings" overlay shows the computational resolution the surface is built from.
 
+**Cross-section sizing.** Each preset (square, triangle, hexagon, star) is generated at its own
+arbitrary proportions internally, then scaled — independently in width (x) and depth (z) — to real
+Width/Depth sliders in the Cross-section panel, so any preset can be sized in actual meters or feet
+instead of whatever proportions it happened to be coded with. Defaults reproduce the original square
+exactly.
+
+**Direct value entry.** Every slider's readout is also a click-to-type field: click it, type a
+number, Enter or blur commits, Escape cancels. Length fields (shear offsets, floor height, all Helix
+dimensions, footprint width/depth) accept feet-inches notation in imperial mode — `8'-6"`, `8' 6"`,
+`8ft 6in` — since that's how architects actually write dimensions.
+
+**Reset values.** Every operation has a "Reset values" button restoring that mode's own parameters
+(and floors/floor-height, where relevant) to their original defaults.
+
+**View navigation.** Top (plan), Front (elevation), and Home buttons sit in the bottom-right of the
+viewport for standard orthographic-ish framing, alongside the usual orbit/pan/zoom. A small marker
+labeled "0,0,0" is always visible at the true world origin when the Axis overlay is on, as a fixed
+reference point regardless of view.
+
 Single HTML file, no build step, Three.js (r128) via CDN. Deployed via GitHub → Netlify
 continuous deployment.
 

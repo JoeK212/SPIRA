@@ -4,6 +4,71 @@ Interactive explorer of architectural deformation operations — twisting, taper
 Joe.K · axisbim.io
 
 CHANGELOG
+v1.9.0 - 2026-07-18 - Three requests. (1) A "Reset values" button on every operation's params block
+         (twist/taper/shear/bend/helix; FFD's existing "Reset control points" folded into the same
+         system), restoring that mode's own parameters — and, for the five height-based modes, floors/
+         floor-height too — to their original first-load defaults, not just whatever they were a
+         moment ago. One generic resetModeValues() driven by a MODE_DEFAULTS config, rather than six
+         near-identical click handlers; reuses the existing unit-aware sync*SliderRange() functions so
+         a reset in imperial mode still lands slider thumbs correctly. (2) Basic view navigation: Top
+         (plan view, straight down — camera.up swapped to a horizontal axis plus a sub-millimeter
+         position epsilon to dodge OrbitControls' known vertical-look singularity), Front (elevation,
+         horizontal), and Home (the existing height-scaled default framing, now factored into a named
+         frameCameraDefault() so the button can re-run it, not just boot code). Also added a small
+         always-visible marker + "0,0,0" label at the true world origin, tied to the Axis toggle but
+         shown even in FFD mode (which otherwise has no axis line of its own) as a fixed reference
+         point regardless of view or mode. (3) Fixed inward-facing surface normals — found by writing
+         a headless Node+three.js diagnostic (validated first against a known-correct THREE.BoxGeometry
+         to rule out a bug in the diagnostic itself, then run against the app's actual builder
+         functions) that checked every triangle's computed normal against a true outward-direction
+         reference: 0% of triangles were outward-facing, across every mode, preset, and cap — a
+         systematic winding-order bug, not a per-triangle mix, so the fix was a consistent reversal in
+         buildDeformedGeometry's side surface and cap triangulation. Re-ran the same diagnostic against
+         buildHelicalGeometry and found its side surface needed the OPPOSITE fix from the footprint
+         builder (kept at the original winding) — its generator point lives in a local (radial,
+         height-offset) frame embedded into world space by rotation, which has the opposite handedness
+         from a footprint profile's direct (x,z) placement, even though the two builders share the same
+         quad-strip index topology; the disk caps did need the same reversal as the footprint caps.
+         Verified 100% outward on every mode/preset/cap combination, including the helix tube's side
+         and both its end caps, before shipping.
+v1.8.0 - 2026-07-18 - Two requests: cross-section dimensions were fixed (each preset's arbitrary
+         hardcoded "unit" proportions) with no way to size a footprint in real dimensions, and every
+         numeric parameter was slider-only with no way to type an exact value. (1) Added Width (x) /
+         Depth (z) sliders to the Cross-section section, in real meters/feet, independent per axis.
+         PROFILES still generates each preset at its own natural proportions (the star's bounding box
+         isn't the square's), so a new scaledProfile() computes the raw shape's bounding box and
+         scales it — independently in x and z — to match these dimensions exactly; used by both
+         rebuild() and the FFD drag handler (which needs the identical scaled box to compute correct
+         default corner positions, or dragging would reference stale geometry). Defaults (2.0×2.0m)
+         reproduce the original hardcoded square exactly (scale factors of 1), and switching presets
+         now keeps a consistent real-world footprint size instead of jumping to whatever proportions
+         each preset happened to be coded with. (2) Every slider's value readout is now also a direct-
+         entry field: click it, type a number, Enter/blur commits, Escape cancels — one generic
+         bindEditableValue() driven by a declarative per-field config rather than duplicating parse/
+         commit logic 17 times. Length fields (shear offsets, floor height, all Helix dimensions, the
+         new footprint width/depth) accept feet-inches notation in imperial mode — 8'-6", 8' 6", 8ft
+         6in — via a new parseLengthInput(), since that's how architects actually write dimensions;
+         the edit box pre-fills with feet-inches (via formatFeetInches()) rather than decimal feet so
+         there's something sensible to already be looking at. Angle and ratio fields take plain
+         decimals; count fields (floors, turns, resolution) round to the nearest integer. Every typed
+         value is clamped to that field's current slider min/max (read live, since several sliders'
+         ranges themselves change with the metric/imperial toggle) before being committed, and commit
+         moves the slider thumb to match so typing and dragging can never fall out of sync with each
+         other.
+v1.7.1 - 2026-07-18 - Two fixes reported after v1.7.0 shipped. (1) Floor/turn lines were nearly
+         invisible: dark ink at 0.4 opacity, sitting exactly on the mesh surface it's drawn from —
+         low contrast against the blue-gray material plus z-fighting with coincident geometry. Now
+         paper-white at 0.95 opacity (every other overlay's accent color — brick, ochre, prussian —
+         was already spoken for, so a light line pops by brightness instead of competing on hue), and
+         nudged 3% outward from the actual profile before evaluating computeLayerPoint so it clears
+         the surface instead of fighting it. (2) Initial camera position was a fixed (9,8,11), tuned
+         to look right only at the original 8-floor/3.5m default — any taller loaded state (more
+         floors, a persisted session, or a multi-turn Helix) put the camera inside or right up against
+         the model on open. Camera framing now scales to totalHeightM() at boot (same direction ratio
+         as the old constant, distance = height × 0.58, floored at 6 so short/squat shapes don't put
+         the camera too close), computed after the localStorage state merge so a persisted tall model
+         frames correctly on load. Scoped to boot only — mid-session parameter changes (floors slider,
+         mode switches, etc.) don't touch the camera, so manual orbit/zoom during use is undisturbed.
 v1.7.0 - 2026-07-18 - Added Helix as a sixth operation (Fig. 9.53-9.60, ch.9 "Helical Surfaces" —
          a different chapter from the other five, which are all ch.13 solid deformations). This is a
          genuinely different construction, not a variant of the shared deformation engine: rather than
@@ -181,6 +246,21 @@ v1.0.0 - 2026-07-17 - Initial build. Twist operation on four cross-section prese
   #hud .label{color:var(--muted);}
   #hud .vol-match{color:var(--brick); font-weight:600;}
 
+  #viewControls{
+    position:absolute; right:14px; bottom:14px;
+    display:flex; gap:6px;
+  }
+  #viewControls button{
+    background:rgba(251,250,246,0.92);
+    border:1px solid var(--line);
+    color:var(--ink);
+    font-family:inherit; font-size:0.72rem;
+    padding:7px 12px;
+    cursor:pointer;
+  }
+  #viewControls button:hover{border-color:var(--prussian); color:var(--prussian);}
+  #viewControls button:active{background:var(--prussian); color:var(--paper); border-color:var(--prussian);}
+
   aside{
     width:300px; flex-shrink:0;
     background:var(--paper);
@@ -206,7 +286,16 @@ v1.0.0 - 2026-07-17 - Initial build. Twist operation on four cross-section prese
 
   .slider-row{margin-bottom:14px;}
   .slider-row .top{display:flex; justify-content:space-between; font-size:0.78rem; margin-bottom:5px;}
-  .slider-row .top .val{font-family:'Space Mono',monospace; color:var(--prussian);}
+  .slider-row .top .val{
+    font-family:'Space Mono',monospace; color:var(--prussian);
+    cursor:text; border-bottom:1px dashed transparent; padding:0 1px;
+  }
+  .slider-row .top .val:hover{border-bottom-color:var(--prussian);}
+  .val-edit-input{
+    font-family:'Space Mono',monospace; font-size:0.78rem; color:var(--prussian);
+    background:var(--cream); border:1px solid var(--prussian); outline:none;
+    width:6.5em; text-align:right; padding:0 2px;
+  }
   input[type=range]{
     width:100%; -webkit-appearance:none; appearance:none;
     height:2px; background:var(--line); outline:none; margin:8px 0;
@@ -281,6 +370,7 @@ v1.0.0 - 2026-07-17 - Initial build. Twist operation on four cross-section prese
     main{flex-direction:column;}
     aside{width:100%; border-left:none; border-top:1px solid var(--line); max-height:46vh;}
     #hud{font-size:0.72rem; max-width:220px;}
+    #viewControls button{padding:6px 9px; font-size:0.68rem;}
   }
 </style>
 </head>
@@ -305,6 +395,11 @@ v1.0.0 - 2026-07-17 - Initial build. Twist operation on four cross-section prese
       <div class="row"><span class="label" id="hudVolStraightLabel">prism volume</span><span class="val mono" id="hudVolStraight">–</span></div>
       <div class="row vol-match" id="hudMatch">volumes match — Cavalieri holds</div>
     </div>
+    <div id="viewControls">
+      <button id="viewTopBtn" title="Look straight down, plan view">Top</button>
+      <button id="viewFrontBtn" title="Look horizontally, elevation view">Front</button>
+      <button id="viewHomeBtn" title="Reset to the default framed view">Home</button>
+    </div>
   </div>
 
   <aside>
@@ -323,6 +418,14 @@ v1.0.0 - 2026-07-17 - Initial build. Twist operation on four cross-section prese
     <section class="group" id="crossSectionSection">
       <h3>Cross-section (profile in plane B)</h3>
       <div class="presets" id="presetGrid"></div>
+      <div class="slider-row" style="margin-top:12px;">
+        <div class="top"><span>width (x)</span><span class="val" id="footprintWidthVal">2.0 m</span></div>
+        <input type="range" id="footprintWidthSlider" min="0.5" max="10" step="0.1" value="2.0">
+      </div>
+      <div class="slider-row">
+        <div class="top"><span>depth (z)</span><span class="val" id="footprintDepthVal">2.0 m</span></div>
+        <input type="range" id="footprintDepthSlider" min="0.5" max="10" step="0.1" value="2.0">
+      </div>
     </section>
 
     <section class="group">
@@ -340,6 +443,7 @@ v1.0.0 - 2026-07-17 - Initial build. Twist operation on four cross-section prese
           <div class="top"><span>α_max (twist of top plane T)</span><span class="val" id="alphaVal">120°</span></div>
           <input type="range" id="alphaSlider" min="-720" max="720" step="1" value="120">
         </div>
+        <button class="btn secondary reset-btn" data-resetmode="twist" style="width:100%; margin-top:6px;">Reset values</button>
       </div>
       <div id="taperParamsBlock" style="display:none;">
         <div class="slider-row">
@@ -350,6 +454,7 @@ v1.0.0 - 2026-07-17 - Initial build. Twist operation on four cross-section prese
           <div class="top"><span>w (y-direction scale at top)</span><span class="val" id="taperWVal">0.50</span></div>
           <input type="range" id="taperWSlider" min="0.1" max="3" step="0.05" value="0.5">
         </div>
+        <button class="btn secondary reset-btn" data-resetmode="taper" style="width:100%; margin-top:6px;">Reset values</button>
       </div>
       <div id="shearParamsBlock" style="display:none;">
         <div class="slider-row">
@@ -360,19 +465,21 @@ v1.0.0 - 2026-07-17 - Initial build. Twist operation on four cross-section prese
           <div class="top"><span>Δy (axis A₁ offset at top)</span><span class="val" id="shearDYVal">1.0 m</span></div>
           <input type="range" id="shearDYSlider" min="-8" max="8" step="0.1" value="1">
         </div>
+        <button class="btn secondary reset-btn" data-resetmode="shear" style="width:100%; margin-top:6px;">Reset values</button>
       </div>
       <div id="bendParamsBlock" style="display:none;">
         <div class="slider-row">
           <div class="top"><span>β_max (bend angle, axis A → arc A₁)</span><span class="val" id="bendBetaVal">180°</span></div>
           <input type="range" id="bendBetaSlider" min="-360" max="360" step="1" value="180">
         </div>
+        <button class="btn secondary reset-btn" data-resetmode="bend" style="width:100%; margin-top:6px;">Reset values</button>
       </div>
       <div id="ffdParamsBlock" style="display:none;">
         <div style="font-size:0.78rem; color:var(--muted); margin-bottom:10px; line-height:1.5;">
           Drag any of the 8 brick control points in the viewport — the solid follows a trilinear
           Bézier blend of all 8, live.
         </div>
-        <button class="btn secondary" id="ffdResetBtn" style="width:100%;">Reset control points</button>
+        <button class="btn secondary reset-btn" data-resetmode="ffd" style="width:100%; margin-top:6px;">Reset control points</button>
       </div>
       <div id="helixParamsBlock" style="display:none;">
         <div style="font-size:0.78rem; color:var(--muted); margin-bottom:8px;">
@@ -402,6 +509,7 @@ v1.0.0 - 2026-07-17 - Initial build. Twist operation on four cross-section prese
             <input type="range" id="helixTubeOffsetSlider" min="0" max="4" step="0.1" value="1.5">
           </div>
         </div>
+        <button class="btn secondary reset-btn" data-resetmode="helix" style="width:100%; margin-top:6px;">Reset values</button>
       </div>
       <div id="commonHeightBlock">
         <div class="slider-row">
@@ -485,7 +593,7 @@ v1.0.0 - 2026-07-17 - Initial build. Twist operation on four cross-section prese
 <script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
 <script src="https://cdn.jsdelivr.net/npm/three@0.128.0/examples/js/controls/OrbitControls.js"></script>
 <script>
-const APP_VERSION = '1.7.0';
+const APP_VERSION = '1.9.0';
 
 // ---------- toast ----------
 let toastTimer=null;
@@ -530,6 +638,14 @@ document.getElementById('footVersion').innerHTML =
 const state = {
   mode: 'twist',          // 'twist' | 'taper' | 'shear' | 'bend' | 'ffd' | 'helix'
   preset: 'square',
+  // Real-world footprint size, independent per axis, applied on top of whichever preset's raw shape
+  // is selected: PROFILES generates each preset at its own natural "unit" proportions (e.g. the
+  // square is 2×2, the star's bounding box is wider), then rebuild() scales that raw shape so its
+  // bounding box exactly matches these dimensions. Defaults (2.0×2.0m) reproduce the original square
+  // exactly (scaleX=scaleZ=1), and switching presets keeps the same real-world footprint size instead
+  // of jumping to each preset's arbitrary hardcoded proportions.
+  footprintWidthM: 2.0,
+  footprintDepthM: 2.0,
   alphaMax: 120,
   taperV: 0.5,             // x-direction scale factor at top plane T (book notation v)
   taperW: 0.5,             // y-direction scale factor at top plane T (book notation w)
@@ -590,6 +706,19 @@ const PROFILES = {
   }
 };
 const PRESET_LABELS = { square:'Square', triangle:'Triangle', hexagon:'Hexagon', star:'Star' };
+
+// Scales a preset's raw (arbitrary-proportioned) shape so its bounding box exactly matches the
+// user's real-world footprintWidthM/footprintDepthM, independently per axis. Used by both rebuild()
+// and the FFD drag handler (which needs the same scaled box to compute correct default corner
+// positions) — kept as one function so they can't drift out of sync with each other.
+function scaledProfile(presetKey, widthM, depthM){
+  const raw = PROFILES[presetKey]();
+  const rawMinX = Math.min(...raw.map(p=>p[0])), rawMaxX = Math.max(...raw.map(p=>p[0]));
+  const rawMinZ = Math.min(...raw.map(p=>p[1])), rawMaxZ = Math.max(...raw.map(p=>p[1]));
+  const scaleX = widthM / ((rawMaxX-rawMinX) || 1);
+  const scaleZ = depthM / ((rawMaxZ-rawMinZ) || 1);
+  return raw.map(p => [p[0]*scaleX, p[1]*scaleZ]);
+}
 
 // shoelace area of a simple polygon (2D)
 function polygonArea(pts){
@@ -726,6 +855,44 @@ function totalHeightM(){
   return state.mode === 'helix' ? state.helixTurns * state.helixPitchM : state.floors * state.floorHeightM;
 }
 
+// Formats decimal feet as architectural feet-inches, e.g. 8.5 -> 8'-6". Used to pre-fill a length
+// field's edit box in imperial mode, since that's the natural format to type a dimension in, even
+// though the passive (non-editing) HUD/slider readouts stay as decimal feet elsewhere in the app.
+function formatFeetInches(decimalFeet){
+  const neg = decimalFeet < 0;
+  decimalFeet = Math.abs(decimalFeet);
+  let feet = Math.floor(decimalFeet);
+  let inches = Math.round((decimalFeet - feet) * 12 * 100) / 100;
+  if(inches >= 12){ feet += 1; inches -= 12; }
+  const inchStr = Number.isInteger(inches) ? String(inches) : inches.toFixed(2).replace(/0+$/,'').replace(/\.$/,'');
+  return `${neg ? '-' : ''}${feet}'-${inchStr}"`;
+}
+
+// Parses a typed length string. Always accepts a plain decimal ("8.5"). In an imperial context, also
+// accepts feet-inches notation — 8'6", 8'-6", 8' 6", 8ft 6in, 8ft — since that's how architects
+// actually write dimensions. Returns a number in the CALLER's display unit (decimal feet if imperial,
+// meters if metric); the caller converts to meters for storage. Returns null if unparseable.
+function parseLengthInput(str, isImperialContext){
+  str = (str||'').trim();
+  if(str === '') return null;
+  if(isImperialContext){
+    // bare inches with no feet component at all, e.g. "6\"" or "6in" — without this check the
+    // general feet(+inches) regex below would misread it as 6 feet.
+    const inchesOnly = str.match(/^(-?\d+(?:\.\d+)?)\s*(?:"|in)\s*$/i);
+    if(inchesOnly && !/'|ft/i.test(str)) return parseFloat(inchesOnly[1]) / 12;
+    if(/['"]|ft|in/i.test(str)){
+      const m = str.match(/^(-?\d+(?:\.\d+)?)\s*(?:'|ft)?\s*-?\s*(\d+(?:\.\d+)?)?\s*(?:"|in)?\s*$/i);
+      if(m){
+        const feet = parseFloat(m[1]) || 0;
+        const inches = m[2] ? parseFloat(m[2]) : 0;
+        return feet + (feet < 0 ? -inches : inches) / 12;
+      }
+    }
+  }
+  const n = parseFloat(str);
+  return Number.isFinite(n) ? n : null;
+}
+
 // Twist, shear, and bend never change a slice's area — rotation, translation, and (per-slice, at
 // fixed height) rotation+translation again are all exact isometries of the plane — so deformed
 // volume == prism volume exactly, by Cavalieri. Taper scales each slice's area by v(z)*w(z), a
@@ -787,16 +954,55 @@ const scene = new THREE.Scene();
 scene.background = new THREE.Color(0xf4f1ea);
 
 const camera = new THREE.PerspectiveCamera(42, 1, 0.1, 200);
-camera.position.set(9, 8, 11);
 
 const renderer = new THREE.WebGLRenderer({ antialias:true });
 renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
 host.appendChild(renderer.domElement);
 
 const controls = new THREE.OrbitControls(camera, renderer.domElement);
-controls.target.set(0, totalHeightM()/2, 0);
 controls.enableDamping = true;
 controls.dampingFactor = 0.08;
+
+// ---------- view framing (Home / Top / Front buttons) ----------
+// Camera framing scales to whatever height is active — including a persisted state from
+// localStorage, which could be much taller or shorter than the original 8-floor/3.5m default this
+// used to be tuned for. Direction/ratio matches the old fixed (9,8,11), just scaled by actual height
+// instead of hardcoded to it, so a tall tower (many floors, or a multi-turn Helix) doesn't load with
+// the camera buried inside it. Factored into a named function (not just inline boot code) so the
+// Home button can re-run the exact same framing later, not just at load.
+function frameCameraDefault(){
+  const h = totalHeightM();
+  camera.up.set(0, 1, 0);
+  const camDir = new THREE.Vector3(9, 8, 11).normalize();
+  const camDist = Math.max(h * 0.58, 6); // 0.58 reproduces the old fixed (9,8,11) framing at h=28m;
+                                          // floor of 6 keeps short/squat shapes from framing too close
+  camera.position.copy(camDir.multiplyScalar(camDist));
+  controls.target.set(0, h/2, 0);
+  controls.update();
+}
+// Top: looks straight down the world y-axis — the standard architectural plan view. A perfectly
+// vertical look direction is a known OrbitControls singularity (its internal spherical-coordinate
+// math degenerates when the camera-to-target vector aligns with the up vector), so camera.up is
+// swapped to a horizontal axis and the camera position gets a sub-millimeter epsilon offset — both
+// standard workarounds, visually imperceptible, that keep the controls' math well-defined.
+function frameCameraTop(){
+  const h = totalHeightM();
+  const dist = Math.max(h * 0.9, 8);
+  camera.up.set(0, 0, -1);
+  camera.position.set(0.001, h/2 + dist, 0.001);
+  controls.target.set(0, h/2, 0);
+  controls.update();
+}
+// Front: looks horizontally toward the model along -z — the standard architectural elevation view.
+function frameCameraFront(){
+  const h = totalHeightM();
+  const dist = Math.max(h * 0.75, 8);
+  camera.up.set(0, 1, 0);
+  camera.position.set(0, h/2, dist);
+  controls.target.set(0, h/2, 0);
+  controls.update();
+}
+frameCameraDefault();
 
 scene.add(new THREE.AmbientLight(0xffffff, 0.65));
 const key = new THREE.DirectionalLight(0xffffff, 0.9);
@@ -847,10 +1053,14 @@ function buildDeformedGeometry(profile, height, segs, mode, params){
       // A deformed quad isn't planar in general, so the two triangles that approximate it always
       // meet at a real dihedral crease along whichever diagonal we pick — splitting along the
       // *shorter* diagonal keeps that crease smallest and least visible under directional light.
+      // Winding order is reversed from the "natural" a,b,c/a,c,d order — with a,b,c,d walking
+      // around each quad the way the profile's own point order does, that natural order produces
+      // inward-facing normals here (verified against a known-correct THREE.BoxGeometry reference
+      // before concluding this), so both branches are flipped to the outward-correct winding.
       if(distSq(a,c) <= distSq(b,d)){
-        indices.push(a,b,c, a,c,d);
+        indices.push(a,c,b, a,d,c);
       } else {
-        indices.push(a,b,d, b,c,d);
+        indices.push(a,d,b, b,d,c);
       }
     }
   }
@@ -882,8 +1092,11 @@ function buildDeformedGeometry(profile, height, segs, mode, params){
     return g;
   }
 
-  const bottomCap = buildCap(0, true);
-  const topCap = buildCap(height, false);
+  // flip=true here means "reverse the raw triangulateShape winding" — bottom needs the raw winding
+  // (flip=false), top needs it reversed (flip=true), the opposite of what might look natural; fixed
+  // to match after the same normal-direction check described above at the side surface.
+  const bottomCap = buildCap(0, false);
+  const topCap = buildCap(height, true);
 
   return { sideGeo, bottomCap, topCap, layerPositions: positions, segs, n };
 }
@@ -916,6 +1129,13 @@ function buildHelicalGeometry(genPts, closed, uSegs, height, params){
     for(let i=0;i<edgeCount;i++){
       const iNext = closed ? (i+1)%n : i+1;
       const a = j*n+i, b = j*n+iNext, c = (j+1)*n+iNext, d = (j+1)*n+i;
+      // NOTE: this does NOT get the same winding flip buildDeformedGeometry's side surface got.
+      // The two builders share this quad topology, but a generator point here lives in a local
+      // (radial, height-offset) frame that gets embedded into world (x,z) via rotation — X(v)cosu,
+      // X(v)sinu — which has the opposite handedness from a footprint profile's direct (x,z)
+      // placement. Verified computationally (a tube built from the 'circle' generator) that this
+      // original winding is the one producing outward-facing normals here, even though the reversed
+      // version was correct for buildDeformedGeometry.
       if(distSq(a,c) <= distSq(b,d)){ indices.push(a,b,c, a,c,d); }
       else { indices.push(a,b,d, b,c,d); }
     }
@@ -938,7 +1158,8 @@ function buildHelicalGeometry(genPts, closed, uSegs, height, params){
       const capIdx = [];
       for(let i=0;i<n;i++){
         const a=i, b=(i+1)%n;
-        if(flip) capIdx.push(centerIdx, b, a); else capIdx.push(centerIdx, a, b);
+        // Same swap as buildCap's flip fix above.
+        if(flip) capIdx.push(centerIdx, a, b); else capIdx.push(centerIdx, b, a);
       }
       const g = new THREE.BufferGeometry();
       g.setAttribute('position', new THREE.Float32BufferAttribute(capPos, 3));
@@ -1006,7 +1227,7 @@ function rebuild(){
     layerPositions = built.layerPositions; segs = built.segs; n = built.n;
     box = null;
   } else {
-    profile = PROFILES[state.preset]();
+    profile = scaledProfile(state.preset, state.footprintWidthM, state.footprintDepthM);
     box = {
       minX: Math.min(...profile.map(p=>p[0])), maxX: Math.max(...profile.map(p=>p[0])),
       minZ: Math.min(...profile.map(p=>p[1])), maxZ: Math.max(...profile.map(p=>p[1]))
@@ -1080,13 +1301,21 @@ function rebuild(){
   // the open 'line' generator, a radial spoke) at every full revolution — y=k·pitch lands exactly
   // on u=k·2π since h=turns·pitch and totalAngle=turns·2π, so the same per-k evaluation works.
   if(state.overlays.floorlines){
-    const floorMat = new THREE.LineBasicMaterial({ color: 0x2a241c, transparent:true, opacity:0.4 });
+    // Paper-white reads as a crisp contour against the blue-gray solid — every other overlay color
+    // (brick for rulings, ochre for slice rings, prussian for the axis) is already spoken for, and a
+    // light line pops by brightness contrast rather than competing on hue. The 1.03x nudge pushes the
+    // ring just outside the mesh's own surface (which sits at these exact same coordinates), avoiding
+    // the z-fighting that was making the old dark, coincident line nearly invisible.
+    const floorMat = new THREE.LineBasicMaterial({ color: 0xfbfaf6, transparent:true, opacity:0.95 });
     const loopCount = state.mode === 'helix' ? state.helixTurns : state.floors;
     const stepM = state.mode === 'helix' ? state.helixPitchM : state.floorHeightM;
     for(let k=0; k<=loopCount; k++){
       const y = k * stepM;
       const pts = [];
-      profile.forEach(p=>{ const [x,yOut,z] = computeLayerPoint(state.mode, params, y, h, p); pts.push(new THREE.Vector3(x, yOut, z)); });
+      profile.forEach(p=>{
+        const [x,yOut,z] = computeLayerPoint(state.mode, params, y, h, [p[0]*1.03, p[1]*1.03]);
+        pts.push(new THREE.Vector3(x, yOut, z));
+      });
       pts.push(pts[0].clone());
       const floorGeo = new THREE.BufferGeometry().setFromPoints(pts);
       overlayGroup.add(new THREE.Line(floorGeo, floorMat));
@@ -1144,6 +1373,21 @@ function rebuild(){
       cone.position.set(0, axisTop, 0);
       overlayGroup.add(cone);
     }
+  }
+
+  // origin marker — a small "you are here" reference at the true (0,0,0) world origin, tied to the
+  // Axis toggle but shown regardless of mode (including FFD, which otherwise skips the axis line
+  // itself since FFD has no axis of its own — a fixed anchor point is still useful there).
+  if(state.overlays.axis){
+    const originMarker = new THREE.Mesh(
+      new THREE.SphereGeometry(Math.max(h*0.015, 0.06), 12, 8),
+      new THREE.MeshBasicMaterial({ color: 0x1a1a18 })
+    );
+    originMarker.position.set(0, 0, 0);
+    overlayGroup.add(originMarker);
+    const originLabel = spriteLabel('0,0,0', '#1a1a18');
+    originLabel.position.set(h*0.05+0.3, h*0.03+0.1, h*0.05+0.3);
+    overlayGroup.add(originLabel);
   }
 
   // base plane B
@@ -1344,6 +1588,8 @@ const helixRInnerSlider = document.getElementById('helixRInnerSlider');
 const helixROuterSlider = document.getElementById('helixROuterSlider');
 const helixTubeRSlider = document.getElementById('helixTubeRSlider');
 const helixTubeOffsetSlider = document.getElementById('helixTubeOffsetSlider');
+const footprintWidthSlider = document.getElementById('footprintWidthSlider');
+const footprintDepthSlider = document.getElementById('footprintDepthSlider');
 alphaSlider.value = state.alphaMax;
 taperVSlider.value = state.taperV;
 taperWSlider.value = state.taperW;
@@ -1467,6 +1713,7 @@ const unitsGrid = document.getElementById('unitsGrid');
     syncFloorHeightSliderRange();
     syncShearSliderRange();
     syncHelixSliderRanges();
+    syncFootprintSliderRange();
     syncSliderLabels(); persist(); rebuild();
     toast(state.units === 'metric' ? 'Metric units' : 'Imperial units');
   });
@@ -1525,6 +1772,21 @@ function syncHelixSliderRanges(){
 }
 syncHelixSliderRanges();
 
+function syncFootprintSliderRange(){
+  if(state.units === 'metric'){
+    footprintWidthSlider.min = 0.5; footprintWidthSlider.max = 10; footprintWidthSlider.step = 0.1;
+    footprintDepthSlider.min = 0.5; footprintDepthSlider.max = 10; footprintDepthSlider.step = 0.1;
+    footprintWidthSlider.value = state.footprintWidthM.toFixed(1);
+    footprintDepthSlider.value = state.footprintDepthM.toFixed(1);
+  } else {
+    footprintWidthSlider.min = 1.5; footprintWidthSlider.max = 33; footprintWidthSlider.step = 0.5;
+    footprintDepthSlider.min = 1.5; footprintDepthSlider.max = 33; footprintDepthSlider.step = 0.5;
+    footprintWidthSlider.value = (state.footprintWidthM * M_TO_FT).toFixed(1);
+    footprintDepthSlider.value = (state.footprintDepthM * M_TO_FT).toFixed(1);
+  }
+}
+syncFootprintSliderRange();
+
 function syncSliderLabels(){
   const u = unitLabels();
   document.getElementById('alphaVal').textContent = state.alphaMax + '°';
@@ -1546,6 +1808,8 @@ function syncSliderLabels(){
   document.getElementById('helixTubeOffsetVal').textContent = toDisplayLen(state.helixTubeOffsetM).toFixed(1) + ' ' + u.len;
   document.getElementById('helixTotalRiseNote').textContent =
     `= ${state.helixTurns} × ${toDisplayLen(state.helixPitchM).toFixed(1)}${u.len} = ${toDisplayLen(state.helixTurns*state.helixPitchM).toFixed(1)}${u.len} total rise`;
+  document.getElementById('footprintWidthVal').textContent = toDisplayLen(state.footprintWidthM).toFixed(1) + ' ' + u.len;
+  document.getElementById('footprintDepthVal').textContent = toDisplayLen(state.footprintDepthM).toFixed(1) + ' ' + u.len;
 }
 syncSliderLabels();
 
@@ -1617,6 +1881,16 @@ helixTubeOffsetSlider.addEventListener('input', e=>{
   state.helixTubeOffsetM = state.units === 'metric' ? v : v / M_TO_FT;
   syncSliderLabels(); persist(); rebuild();
 });
+footprintWidthSlider.addEventListener('input', e=>{
+  const v = parseFloat(e.target.value);
+  state.footprintWidthM = state.units === 'metric' ? v : v / M_TO_FT;
+  syncSliderLabels(); persist(); rebuild();
+});
+footprintDepthSlider.addEventListener('input', e=>{
+  const v = parseFloat(e.target.value);
+  state.footprintDepthM = state.units === 'metric' ? v : v / M_TO_FT;
+  syncSliderLabels(); persist(); rebuild();
+});
 
 document.querySelectorAll('.switch').forEach(sw=>{
   const key = sw.dataset.toggle;
@@ -1633,11 +1907,51 @@ document.querySelectorAll('.switch').forEach(sw=>{
   c.classList.toggle('active', c.dataset.preset === state.preset);
 });
 
-document.getElementById('ffdResetBtn').addEventListener('click', ()=>{
-  state.ffdOffsets = [0,0,0,0,0,0,0,0].map(()=>({dx:0, dy:0, dz:0}));
-  persist(); rebuild();
-  toast('Control points reset');
+// ---------- reset values ----------
+// Per-mode defaults, matching the state object's own initial values exactly — kept as a separate
+// constant (rather than re-reading from `state` itself, which would just return whatever's been
+// changed) so "reset" always means "back to what this mode looked like on first load," not "back to
+// whatever it was a moment ago." twist/taper/shear/bend also reset the shared floors/floor-height,
+// since those are what "this operation's values" visibly means to someone looking at the sidebar;
+// Helix's own turns/pitch serve the same role for it, so its floors/floor-height aren't touched (it
+// doesn't use them). ffd is handled separately below since its "value" is the 8-point offset array,
+// not a flat set of fields.
+const MODE_DEFAULTS = {
+  twist: { alphaMax: 120, floors: 8, floorHeightM: 3.5 },
+  taper: { taperV: 0.5, taperW: 0.5, floors: 8, floorHeightM: 3.5 },
+  shear: { shearDXM: 3.0, shearDYM: 1.0, floors: 8, floorHeightM: 3.5 },
+  bend: { bendBetaMax: 180, floors: 8, floorHeightM: 3.5 },
+  helix: { helixGenerator: 'line', helixTurns: 3, helixPitchM: 3.0, helixRInnerM: 0.3, helixROuterM: 2.2, helixTubeRM: 0.25, helixTubeOffsetM: 1.5 },
+};
+function resetModeValues(mode){
+  if(mode === 'ffd'){
+    state.ffdOffsets = [0,0,0,0,0,0,0,0].map(()=>({dx:0, dy:0, dz:0}));
+  } else {
+    Object.assign(state, MODE_DEFAULTS[mode]);
+  }
+  // Reposition every slider to match the now-reset state, reusing the same unit-aware sync
+  // functions the metric/imperial toggle already relies on, so a reset while in imperial mode still
+  // lands sliders at the right thumb position rather than the raw metric default numbers.
+  alphaSlider.value = state.alphaMax;
+  taperVSlider.value = state.taperV;
+  taperWSlider.value = state.taperW;
+  bendBetaSlider.value = state.bendBetaMax;
+  floorsSlider.value = state.floors;
+  helixTurnsSlider.value = state.helixTurns;
+  syncFloorHeightSliderRange();
+  syncShearSliderRange();
+  syncHelixSliderRanges();
+  applyModeChrome(); // in case helixGenerator changed, so the Line/Circle sub-toggle display follows
+  syncSliderLabels(); persist(); rebuild();
+  toast((mode === 'ffd' ? 'Control points' : MODE_LABEL[mode] + ' values') + ' reset');
+}
+document.querySelectorAll('.reset-btn').forEach(btn=>{
+  btn.addEventListener('click', ()=> resetModeValues(btn.dataset.resetmode));
 });
+
+document.getElementById('viewTopBtn').addEventListener('click', ()=>{ frameCameraTop(); toast('Top view'); });
+document.getElementById('viewFrontBtn').addEventListener('click', ()=>{ frameCameraFront(); toast('Front / elevation view'); });
+document.getElementById('viewHomeBtn').addEventListener('click', ()=>{ frameCameraDefault(); toast('Home view'); });
 
 // ---------- FFD handle dragging ----------
 // Standard screen-facing-plane drag: on pointerdown over a handle, build a plane through that
@@ -1666,7 +1980,7 @@ renderer.domElement.addEventListener('pointerdown', (evt)=>{
   draggingIndex = hits[0].object.userData.ffdIndex;
   const iu = Math.floor(draggingIndex/4), iv = Math.floor((draggingIndex%4)/2), iw = draggingIndex%2;
   const h = totalHeightM();
-  const profile = PROFILES[state.preset]();
+  const profile = scaledProfile(state.preset, state.footprintWidthM, state.footprintDepthM);
   const box = {
     minX: Math.min(...profile.map(p=>p[0])), maxX: Math.max(...profile.map(p=>p[0])),
     minZ: Math.min(...profile.map(p=>p[1])), maxZ: Math.max(...profile.map(p=>p[1]))
@@ -1711,6 +2025,102 @@ function endFfdDrag(){
 }
 renderer.domElement.addEventListener('pointerup', endFfdDrag);
 renderer.domElement.addEventListener('pointerleave', endFfdDrag);
+
+// ---------- click-to-type value entry ----------
+// Every slider's readout is also a direct-entry field: click it, type a number (or, for a length
+// field in imperial mode, feet-inches like 8'-6"), Enter/blur commits, Escape cancels. One generic
+// binder driven by a declarative config per field, rather than duplicating click/parse/commit logic
+// for each of the ~19 fields — 'length' fields store meters and accept feet-inches; 'angle' and
+// 'ratio' are plain decimals; 'count' rounds to an integer. Committing re-runs the exact same
+// syncSliderLabels/persist/rebuild sequence the slider's own 'input' listener uses, and moves the
+// slider thumb to match, so typing a value and dragging the slider stay in perfect sync either way.
+const EDITABLE_FIELDS = [
+  { valId:'alphaVal', sliderEl:alphaSlider, type:'angle', get:()=>state.alphaMax, set:v=>{state.alphaMax=v;} },
+  { valId:'bendBetaVal', sliderEl:bendBetaSlider, type:'angle', get:()=>state.bendBetaMax, set:v=>{state.bendBetaMax=v;} },
+  { valId:'taperVVal', sliderEl:taperVSlider, type:'ratio', get:()=>state.taperV, set:v=>{state.taperV=v;} },
+  { valId:'taperWVal', sliderEl:taperWSlider, type:'ratio', get:()=>state.taperW, set:v=>{state.taperW=v;} },
+  { valId:'shearDXVal', sliderEl:shearDXSlider, type:'length', getM:()=>state.shearDXM, setM:v=>{state.shearDXM=v;} },
+  { valId:'shearDYVal', sliderEl:shearDYSlider, type:'length', getM:()=>state.shearDYM, setM:v=>{state.shearDYM=v;} },
+  { valId:'floorsVal', sliderEl:floorsSlider, type:'count', get:()=>state.floors, set:v=>{state.floors=v;} },
+  { valId:'floorHeightVal', sliderEl:floorHeightSlider, type:'length', getM:()=>state.floorHeightM, setM:v=>{state.floorHeightM=v;} },
+  { valId:'resVal', sliderEl:resSlider, type:'count', get:()=>state.segments, set:v=>{state.segments=v;} },
+  { valId:'helixTurnsVal', sliderEl:helixTurnsSlider, type:'count', get:()=>state.helixTurns, set:v=>{state.helixTurns=v;} },
+  { valId:'helixPitchVal', sliderEl:helixPitchSlider, type:'length', getM:()=>state.helixPitchM, setM:v=>{state.helixPitchM=v;} },
+  { valId:'helixRInnerVal', sliderEl:helixRInnerSlider, type:'length', getM:()=>state.helixRInnerM, setM:v=>{state.helixRInnerM=v;} },
+  { valId:'helixROuterVal', sliderEl:helixROuterSlider, type:'length', getM:()=>state.helixROuterM, setM:v=>{state.helixROuterM=v;} },
+  { valId:'helixTubeRVal', sliderEl:helixTubeRSlider, type:'length', getM:()=>state.helixTubeRM, setM:v=>{state.helixTubeRM=v;} },
+  { valId:'helixTubeOffsetVal', sliderEl:helixTubeOffsetSlider, type:'length', getM:()=>state.helixTubeOffsetM, setM:v=>{state.helixTubeOffsetM=v;} },
+  { valId:'footprintWidthVal', sliderEl:footprintWidthSlider, type:'length', getM:()=>state.footprintWidthM, setM:v=>{state.footprintWidthM=v;} },
+  { valId:'footprintDepthVal', sliderEl:footprintDepthSlider, type:'length', getM:()=>state.footprintDepthM, setM:v=>{state.footprintDepthM=v;} },
+];
+
+function bindEditableValue(cfg){
+  const valEl = document.getElementById(cfg.valId);
+  valEl.title = 'Click to type a value';
+  valEl.addEventListener('click', ()=>{
+    if(valEl.querySelector('input')) return; // already editing
+
+    let currentRaw;
+    if(cfg.type === 'length'){
+      const m = cfg.getM();
+      currentRaw = state.units === 'imperial' ? formatFeetInches(m*M_TO_FT) : toDisplayLen(m).toFixed(2);
+    } else if(cfg.type === 'ratio'){
+      currentRaw = cfg.get().toFixed(2);
+    } else {
+      currentRaw = String(cfg.get());
+    }
+
+    const input = document.createElement('input');
+    input.type = 'text';
+    input.className = 'val-edit-input';
+    input.value = currentRaw;
+
+    let committed = false;
+    function commit(){
+      if(committed) return;
+      committed = true;
+      const raw = input.value.trim();
+      let ok = false;
+      if(cfg.type === 'length'){
+        const parsedDisplay = parseLengthInput(raw, state.units === 'imperial');
+        if(parsedDisplay !== null){
+          let m = state.units === 'imperial' ? parsedDisplay / M_TO_FT : parsedDisplay;
+          const minM = state.units === 'imperial' ? parseFloat(cfg.sliderEl.min)/M_TO_FT : parseFloat(cfg.sliderEl.min);
+          const maxM = state.units === 'imperial' ? parseFloat(cfg.sliderEl.max)/M_TO_FT : parseFloat(cfg.sliderEl.max);
+          m = Math.min(maxM, Math.max(minM, m));
+          cfg.setM(m);
+          cfg.sliderEl.value = state.units === 'imperial' ? (m*M_TO_FT).toFixed(2) : m.toFixed(2);
+          ok = true;
+        }
+      } else {
+        const n = parseFloat(raw);
+        if(Number.isFinite(n)){
+          let v = cfg.type === 'count' ? Math.round(n) : n;
+          const min = parseFloat(cfg.sliderEl.min), max = parseFloat(cfg.sliderEl.max);
+          v = Math.min(max, Math.max(min, v));
+          cfg.set(v);
+          cfg.sliderEl.value = v;
+          ok = true;
+        }
+      }
+      if(ok){ persist(); rebuild(); }
+      syncSliderLabels(); // restores the span's text either way — the committed value if ok, unchanged if not
+    }
+    input.addEventListener('keydown', e=>{
+      if(e.key === 'Enter') commit();
+      else if(e.key === 'Escape'){ committed = true; syncSliderLabels(); }
+      e.stopPropagation();
+    });
+    input.addEventListener('blur', commit);
+    input.addEventListener('click', e=>e.stopPropagation());
+
+    valEl.textContent = '';
+    valEl.appendChild(input);
+    input.focus();
+    input.select();
+  });
+}
+EDITABLE_FIELDS.forEach(bindEditableValue);
 
 // ---------- render loop ----------
 function animate(){
