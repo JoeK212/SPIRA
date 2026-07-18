@@ -4,6 +4,19 @@ Interactive explorer of architectural deformation operations — twisting, taper
 Joe.K · axisbim.io
 
 CHANGELOG
+v1.16.0 - 2026-07-18 - Added two real-building case-study presets to Twist mode: Turning Torso
+         (Calatrava, Malmö, 2005 — 190m, 54 floors, 90° total twist, square/cube plan) and Cayan
+         Tower (SOM, Dubai, 2013 — 306m, 73 floors, 90° total twist, hexagonal plan). Both chosen
+         specifically because they're twist-ONLY buildings (no accompanying taper) — a genuinely
+         twisting-and-tapering building like Shanghai Tower would need combined operations this tool
+         doesn't support, and modeling it as twist-only would misrepresent its real form, so it was
+         deliberately left out rather than shipped as a shakier approximation. Height, floor count,
+         and total twist angle are sourced, documented figures for each building; footprint
+         width/depth are an illustrative estimate, not a published plan dimension, and the UI says
+         so directly under the buttons rather than presenting every number as equally verified.
+         Bumped the floors slider max 60→80 (Cayan needs 73) and the footprint width/depth slider
+         max 10m/33ft→30m/100ft (both buildings' illustrative footprints exceed the old max, sized
+         for classroom-scale massing) — both were previously capped well below real-building scale.
 v1.15.0 - 2026-07-18 - Added "Pipe" as a third Helix generator, closing the gap flagged since
          v1.7.0/EXTENDED.md's Known Limitations: a circle held orthogonal to the helix's own
          tangent at every point (the "true" constant-radius pipe), as opposed to Circle's simplified
@@ -666,6 +679,16 @@ v1.0.0 - 2026-07-17 - Initial build. Twist operation on four cross-section prese
           <input type="range" id="alphaSlider" min="-720" max="720" step="1" value="120">
         </div>
         <button class="btn secondary reset-btn" data-resetmode="twist" style="width:100%; margin-top:6px;">Reset values</button>
+        <div style="font-size:0.78rem; color:var(--muted); margin:14px 0 8px;">
+          Case studies (real 90°-twist buildings)
+        </div>
+        <div class="presets" id="twistCaseStudyGrid" style="grid-template-columns:1fr 1fr; margin-bottom:2px;">
+          <button class="btn secondary" data-casestudy="turningtorso" style="font-size:0.74rem;">Turning Torso</button>
+          <button class="btn secondary" data-casestudy="cayantower" style="font-size:0.74rem;">Cayan Tower</button>
+        </div>
+        <div style="font-size:0.68rem; color:var(--muted); line-height:1.4; margin-top:4px;">
+          Height, floor count, and total twist are sourced figures; footprint size is an illustrative estimate.
+        </div>
       </div>
       <div id="taperParamsBlock" style="display:none;">
         <div class="slider-row">
@@ -737,7 +760,7 @@ v1.0.0 - 2026-07-17 - Initial build. Twist operation on four cross-section prese
       <div id="commonHeightBlock">
         <div class="slider-row">
           <div class="top"><span>floors</span><span class="val" id="floorsVal">8</span></div>
-          <input type="range" id="floorsSlider" min="1" max="60" step="1" value="8">
+          <input type="range" id="floorsSlider" min="1" max="80" step="1" value="8">
         </div>
         <div class="slider-row">
           <div class="top"><span>floor-to-floor height</span><span class="val" id="floorHeightVal">3.5 m</span></div>
@@ -842,7 +865,7 @@ v1.0.0 - 2026-07-17 - Initial build. Twist operation on four cross-section prese
 <script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
 <script src="https://cdn.jsdelivr.net/npm/three@0.128.0/examples/js/controls/OrbitControls.js"></script>
 <script>
-const APP_VERSION = '1.15.0';
+const APP_VERSION = '1.16.0';
 
 // ---------- toast ----------
 let toastTimer=null;
@@ -2283,13 +2306,13 @@ syncHelixSliderRanges();
 
 function syncFootprintSliderRange(){
   if(state.units === 'metric'){
-    footprintWidthSlider.min = 0.5; footprintWidthSlider.max = 10; footprintWidthSlider.step = 0.1;
-    footprintDepthSlider.min = 0.5; footprintDepthSlider.max = 10; footprintDepthSlider.step = 0.1;
+    footprintWidthSlider.min = 0.5; footprintWidthSlider.max = 30; footprintWidthSlider.step = 0.1;
+    footprintDepthSlider.min = 0.5; footprintDepthSlider.max = 30; footprintDepthSlider.step = 0.1;
     footprintWidthSlider.value = state.footprintWidthM.toFixed(1);
     footprintDepthSlider.value = state.footprintDepthM.toFixed(1);
   } else {
-    footprintWidthSlider.min = 1.5; footprintWidthSlider.max = 33; footprintWidthSlider.step = 0.5;
-    footprintDepthSlider.min = 1.5; footprintDepthSlider.max = 33; footprintDepthSlider.step = 0.5;
+    footprintWidthSlider.min = 1.5; footprintWidthSlider.max = 100; footprintWidthSlider.step = 0.5;
+    footprintDepthSlider.min = 1.5; footprintDepthSlider.max = 100; footprintDepthSlider.step = 0.5;
     footprintWidthSlider.value = (state.footprintWidthM * M_TO_FT).toFixed(1);
     footprintDepthSlider.value = (state.footprintDepthM * M_TO_FT).toFixed(1);
   }
@@ -2462,6 +2485,54 @@ function resetModeValues(mode){
 }
 document.querySelectorAll('.reset-btn').forEach(btn=>{
   btn.addEventListener('click', ()=> resetModeValues(btn.dataset.resetmode));
+});
+
+// ---------- twist case studies (real buildings) ----------
+// Height, floor count, and total twist angle are sourced, documented figures for each building.
+// Footprint width/depth are NOT sourced from a published plan dimension — they're a rough
+// illustrative estimate sized to look proportionate, called out as such in the UI (see the note
+// under the case-study buttons) rather than presented as if they were verified. Both buildings were
+// chosen specifically because they're twist-only (no accompanying taper), so a single Twist-mode
+// preset actually represents them honestly — a twisting-AND-tapering building like Shanghai Tower
+// would need combined operations this tool doesn't support yet, and modeling it as twist-only here
+// would misrepresent its real form.
+const CASE_STUDIES = {
+  turningtorso: {
+    label: 'Turning Torso',
+    preset: 'square', alphaMax: 90, floors: 54, floorHeightM: 190/54,
+    footprintWidthM: 23, footprintDepthM: 23,
+    toast: 'Turning Torso — 190m, 54 floors, 90° twist (Calatrava, Malmö, 2005)'
+  },
+  cayantower: {
+    label: 'Cayan Tower',
+    preset: 'hexagon', alphaMax: 90, floors: 73, floorHeightM: 306/73,
+    footprintWidthM: 22, footprintDepthM: 22,
+    toast: 'Cayan Tower — 306m, 73 floors, 90° twist (SOM, Dubai, 2013)'
+  }
+};
+function loadCaseStudy(key){
+  const cs = CASE_STUDIES[key];
+  if(!cs) return;
+  state.mode = 'twist';
+  state.preset = cs.preset;
+  state.alphaMax = cs.alphaMax;
+  state.floors = cs.floors;
+  state.floorHeightM = cs.floorHeightM;
+  state.footprintWidthM = cs.footprintWidthM;
+  state.footprintDepthM = cs.footprintDepthM;
+  // Reposition every affected control to match, same approach resetModeValues uses — unit-aware
+  // sync functions so this lands correctly whether the sidebar is currently metric or imperial.
+  [...presetGrid.children].forEach(c=>c.classList.toggle('active', c.dataset.preset === cs.preset));
+  alphaSlider.value = state.alphaMax;
+  floorsSlider.value = state.floors;
+  syncFloorHeightSliderRange();
+  syncFootprintSliderRange();
+  applyModeChrome();
+  syncSliderLabels(); persist(); rebuild();
+  toast(cs.toast);
+}
+document.querySelectorAll('#twistCaseStudyGrid [data-casestudy]').forEach(btn=>{
+  btn.addEventListener('click', ()=> loadCaseStudy(btn.dataset.casestudy));
 });
 
 // ---------- loft profiles (.json) export ----------

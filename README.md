@@ -4,7 +4,12 @@ An interactive explorer of architectural deformation operations. Six so far:
 
 **Twist** — a fixed base plane B, a vertical axis A, and every horizontal slice rotated by
 α(z) = (z/h)·α_max. Straight vertical edges become helices; volume is always exactly preserved
-(Cavalieri's principle), which the app states directly rather than leaving as an exercise.
+(Cavalieri's principle), which the app states directly rather than leaving as an exercise. Two
+one-click case studies load real, documented buildings: **Turning Torso** (Calatrava, Malmö, 2005 —
+190m, 54 floors, 90° total twist) and **Cayan Tower** (SOM, Dubai, 2013 — 306m, 73 floors, 90° total
+twist). Both were picked because they're twist-only — no accompanying taper — so a single Twist
+preset actually represents them honestly; height, floor count, and twist angle are sourced, footprint
+size is an illustrative estimate (the UI says so).
 
 **Taper** — the same fixed B and A, but each slice is scaled instead of rotated: independently in
 x (factor v(z)) and y (factor w(z)), linear from 1 at the base to user-set v, w at the top. Despite
