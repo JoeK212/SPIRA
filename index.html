@@ -4,6 +4,17 @@ Interactive explorer of architectural deformation operations — twisting, taper
 Joe.K · axisbim.io
 
 CHANGELOG
+v1.16.1 - 2026-07-18 - Fixed a blank canvas after loading the Cayan Tower case study (user report:
+         "Home leaves you blank space"). The camera's far clipping plane was a fixed 200 units —
+         harmless at classroom-model scale, but Cayan Tower is 306m tall internally (real meters,
+         not a scaled-down abstraction), so the entire model sat beyond where the camera could see
+         it once framed at a matching distance. Home's own framing math was already correct
+         (verified — it computed the right distance and target), it just handed the projection
+         matrix a far plane too small to contain the result, so re-clicking Home couldn't fix it
+         either. near/far now scale with the actual framed model size in all three framing functions
+         (Default/Top/Front) instead of a fixed range; verified numerically for Cayan Tower's real
+         scale (radius ~154m, camera distance ~494m) that the whole model now sits inside
+         [near, far] with margin on both sides.
 v1.16.0 - 2026-07-18 - Added two real-building case-study presets to Twist mode: Turning Torso
          (Calatrava, Malmö, 2005 — 190m, 54 floors, 90° total twist, square/cube plan) and Cayan
          Tower (SOM, Dubai, 2013 — 306m, 73 floors, 90° total twist, hexagonal plan). Both chosen
@@ -865,7 +876,7 @@ v1.0.0 - 2026-07-17 - Initial build. Twist operation on four cross-section prese
 <script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
 <script src="https://cdn.jsdelivr.net/npm/three@0.128.0/examples/js/controls/OrbitControls.js"></script>
 <script>
-const APP_VERSION = '1.16.0';
+const APP_VERSION = '1.16.1';
 
 // ---------- toast ----------
 let toastTimer=null;
@@ -1339,7 +1350,9 @@ const host = document.getElementById('canvasHost');
 const scene = new THREE.Scene();
 scene.background = new THREE.Color(0xf4f1ea);
 
-const camera = new THREE.PerspectiveCamera(42, 1, 0.1, 200);
+const camera = new THREE.PerspectiveCamera(42, 1, 0.1, 2000); // near/far re-tightened per-model in
+                                                                 // frameCameraDefault/Top/Front below;
+                                                                 // this is just a safe initial value
 
 const renderer = new THREE.WebGLRenderer({ antialias:true });
 renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
@@ -1363,6 +1376,9 @@ function frameCameraDefault(){
   if(box.isEmpty()){
     const h = totalHeightM();
     const camDist = Math.max(h * 0.58, 6); // 0.58 reproduces the old fixed (9,8,11) framing at h=28m
+    camera.near = Math.max(camDist*0.01, 0.01);
+    camera.far = camDist*4 + h*4 + 50;
+    camera.updateProjectionMatrix();
     camera.position.copy(camDir.multiplyScalar(camDist));
     controls.target.set(0, h/2, 0);
     controls.update();
@@ -1374,7 +1390,14 @@ function frameCameraDefault(){
   const vFov = camera.fov * Math.PI/180;
   const hFov = 2 * Math.atan(Math.tan(vFov/2) * camera.aspect);
   const fitDist = Math.max(radius / Math.sin(vFov/2), radius / Math.sin(hFov/2)) * 1.15; // 15% pad
-  camera.position.copy(center.clone().add(camDir.multiplyScalar(Math.max(fitDist, 6))));
+  const dist = Math.max(fitDist, 6);
+  // near/far scale with the model instead of a fixed range — a fixed far=200 clipped the entire
+  // model for anything larger than ~200 units (a real-scale case study like Cayan Tower is 306m
+  // tall), rendering a blank canvas even though framing math itself was correct.
+  camera.near = Math.max(dist*0.01, 0.01);
+  camera.far = dist + radius*2 + 50;
+  camera.updateProjectionMatrix();
+  camera.position.copy(center.clone().add(camDir.multiplyScalar(dist)));
   controls.target.copy(center);
   controls.update();
 }
@@ -1387,6 +1410,9 @@ function frameCameraTop(){
   const h = totalHeightM();
   const dist = Math.max(h * 0.9, 8);
   camera.up.set(0, 0, -1);
+  camera.near = Math.max(dist*0.01, 0.01);
+  camera.far = dist*2 + h*2 + 50;
+  camera.updateProjectionMatrix();
   camera.position.set(0.001, h/2 + dist, 0.001);
   controls.target.set(0, h/2, 0);
   controls.update();
@@ -1396,6 +1422,9 @@ function frameCameraFront(){
   const h = totalHeightM();
   const dist = Math.max(h * 0.75, 8);
   camera.up.set(0, 1, 0);
+  camera.near = Math.max(dist*0.01, 0.01);
+  camera.far = dist*2 + h*2 + 50;
+  camera.updateProjectionMatrix();
   camera.position.set(0, h/2, dist);
   controls.target.set(0, h/2, 0);
   controls.update();
