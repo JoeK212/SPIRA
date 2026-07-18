@@ -4,6 +4,24 @@ Interactive explorer of architectural deformation operations — twisting, taper
 Joe.K · axisbim.io
 
 CHANGELOG
+v1.14.3 - 2026-07-18 - Fixed the actual source of the surface striping v1.14.2's ring nudge didn't
+         fully address (user confirmed it was still visible with the Slice rings overlay off): flat
+         shading itself produces a Mach-band effect on a curved surface built from many thin flat
+         facets — a real optical illusion at any facet count, not fixed by resolution. Rebuilt
+         buildDeformedGeometry (twist/taper/shear/bend/ffd) to build each polygon-corner-to-corner
+         panel as its own private pair of vertex columns (rather than corner vertices shared between
+         neighboring panels) and assign each vertex an analytic normal computed directly from the
+         deformation's own tangent vectors (width tangent = exact edge vector for these four modes,
+         all of which are affine per height slice; height tangent = finite difference of
+         computeLayerPoint) rather than Three.js's face-averaging computeVertexNormals(). Side
+         material for these modes switched from flatShading:true to smooth shading, now safe because
+         analytic normals don't depend on which diagonal a quad happens to be split along — that
+         diagonal-dependence was the actual cause of the v1.12.2 herringbone bug flatShading had
+         been covering for. True polygon corners stay visually sharp since adjacent panels no longer
+         share vertices/normals at all. Helix (buildHelicalGeometry, still shared-vertex) is
+         untouched and keeps flatShading:true. Verified headlessly (Node + three.js): normals point
+         outward (dot ≥0.5–0.9+ against the known-radial direction) for a plain untwisted prism and
+         a 120°-twisted case, and produce no NaNs across taper/shear/bend/ffd.
 v1.14.2 - 2026-07-18 - Fixed two visual bugs. (1) Slice rings overlay was z-fighting with the mesh
          surface it's coincident with, showing as fine horizontal striping/banding across the whole
          solid, most visible at higher resolution (many closely-spaced rings). Each ring's vertices
@@ -803,7 +821,7 @@ v1.0.0 - 2026-07-17 - Initial build. Twist operation on four cross-section prese
 <script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
 <script src="https://cdn.jsdelivr.net/npm/three@0.128.0/examples/js/controls/OrbitControls.js"></script>
 <script>
-const APP_VERSION = '1.14.2';
+const APP_VERSION = '1.14.3';
 
 // ---------- toast ----------
 let toastTimer=null;
@@ -1321,50 +1339,99 @@ function resize(){
 window.addEventListener('resize', resize);
 
 // ---------- geometry builders ----------
+function cross3(a, b){
+  return [ a[1]*b[2]-a[2]*b[1], a[2]*b[0]-a[0]*b[2], a[0]*b[1]-a[1]*b[0] ];
+}
+function normalize3(v){
+  const len = Math.hypot(v[0], v[1], v[2]) || 1;
+  return [ v[0]/len, v[1]/len, v[2]/len ];
+}
+function distSqArr(arr, ia, ib){
+  const ax=arr[ia*3], ay=arr[ia*3+1], az=arr[ia*3+2];
+  const bx=arr[ib*3], by=arr[ib*3+1], bz=arr[ib*3+2];
+  const dx=ax-bx, dy=ay-by, dz=az-bz;
+  return dx*dx+dy*dy+dz*dz;
+}
+
 function buildDeformedGeometry(profile, height, segs, mode, params){
   const n = profile.length;
-  const positions = [];
-  const indices = [];
 
-  // side surface: (segs+1) layers x n profile points
+  // layerPositions: one vertex per profile corner per layer, shared across panels — this is the
+  // shape ruling lines / slice rings / floor lines / the loft-profiles exporter all expect (indexed
+  // as (j*n+i)*3), so it's kept exactly as before regardless of how the render mesh itself is built.
+  const layerPositions = [];
   for(let j=0; j<=segs; j++){
     const y = (j/segs) * height;
     for(let i=0;i<n;i++){
       const [x,yOut,z] = computeLayerPoint(mode, params, y, height, profile[i]);
-      positions.push(x, yOut, z);
+      layerPositions.push(x, yOut, z);
     }
   }
-  function distSq(ia, ib){
-    const ax=positions[ia*3], ay=positions[ia*3+1], az=positions[ia*3+2];
-    const bx=positions[ib*3], by=positions[ib*3+1], bz=positions[ib*3+2];
-    const dx=ax-bx, dy=ay-by, dz=az-bz;
-    return dx*dx+dy*dy+dz*dz;
-  }
-  for(let j=0;j<segs;j++){
-    for(let i=0;i<n;i++){
-      const a = j*n + i;
-      const b = j*n + (i+1)%n;
-      const c = (j+1)*n + (i+1)%n;
-      const d = (j+1)*n + i;
-      // A deformed quad isn't planar in general, so the two triangles that approximate it always
-      // meet at a real dihedral crease along whichever diagonal we pick — splitting along the
-      // *shorter* diagonal keeps that crease smallest and least visible under directional light.
-      // Winding order is reversed from the "natural" a,b,c/a,c,d order — with a,b,c,d walking
-      // around each quad the way the profile's own point order does, that natural order produces
-      // inward-facing normals here (verified against a known-correct THREE.BoxGeometry reference
-      // before concluding this), so both branches are flipped to the outward-correct winding.
-      if(distSq(a,c) <= distSq(b,d)){
-        indices.push(a,c,b, a,d,c);
-      } else {
-        indices.push(a,d,b, b,d,c);
-      }
+
+  // Render mesh: built per-panel (the straight edge between profile corner i and i+1 of an
+  // n-gon), each panel with its own private pair of vertex columns rather than sharing corner
+  // vertices with its neighboring panel. That split matters because it lets the side surface use
+  // smooth per-vertex normals along height (removing the flat-shading Mach-band striping visible
+  // at high resolution — v1.14.2's slice-ring fix addressed a real but separate z-fighting issue,
+  // not this one) while keeping a genuine sharp edge at every real polygon corner, where the cross-
+  // section actually does have a crease. Normals are computed analytically rather than via
+  // Three.js's face-averaging computeVertexNormals(), since the earlier herringbone bug (v1.12.2)
+  // came from averaging across a per-quad diagonal choice that flips direction quad to quad —
+  // analytic normals don't depend on that triangulation choice at all.
+  const positions = [];
+  const normals = [];
+  const indices = [];
+  const dY = Math.max(height/segs, 1e-5) * 0.5; // finite-difference step for the height tangent
+
+  for(let i=0;i<n;i++){
+    const iN = (i+1) % n;
+    const panelBase = positions.length / 3;
+    for(let j=0; j<=segs; j++){
+      const y = (j/segs) * height;
+      const left  = computeLayerPoint(mode, params, y, height, profile[i]);
+      const right = computeLayerPoint(mode, params, y, height, profile[iN]);
+
+      // Width tangent (∂S/∂u): exact, not approximated — a panel is a ruled straight-line surface
+      // between two corners at any given height, so its width-direction derivative is just the
+      // edge vector itself, constant along that edge.
+      const tw = [ right[0]-left[0], right[1]-left[1], right[2]-left[2] ];
+
+      // Height tangent (∂S/∂v) per column, central difference (one-sided at the two ends).
+      const yLo = Math.max(0, y-dY), yHi = Math.min(height, y+dY);
+      const denom = (yHi - yLo) || dY;
+      const lLo = computeLayerPoint(mode, params, yLo, height, profile[i]);
+      const lHi = computeLayerPoint(mode, params, yHi, height, profile[i]);
+      const tvL = [ (lHi[0]-lLo[0])/denom, (lHi[1]-lLo[1])/denom, (lHi[2]-lLo[2])/denom ];
+      const rLo = computeLayerPoint(mode, params, yLo, height, profile[iN]);
+      const rHi = computeLayerPoint(mode, params, yHi, height, profile[iN]);
+      const tvR = [ (rHi[0]-rLo[0])/denom, (rHi[1]-rLo[1])/denom, (rHi[2]-rLo[2])/denom ];
+
+      // Outward normal = tangent-height × tangent-width — this ordering (not the reverse) is what
+      // matches the outward-winding convention already established below and verified elsewhere in
+      // this file against a known-correct THREE.BoxGeometry reference (see the indices comment).
+      const nL = normalize3(cross3(tvL, tw));
+      const nR = normalize3(cross3(tvR, tw));
+
+      positions.push(left[0], left[1], left[2]);   normals.push(nL[0], nL[1], nL[2]);
+      positions.push(right[0], right[1], right[2]); normals.push(nR[0], nR[1], nR[2]);
+    }
+    for(let j=0;j<segs;j++){
+      const a = panelBase + j*2;        // left,  layer j
+      const b = panelBase + j*2 + 1;    // right, layer j
+      const c = panelBase + (j+1)*2 + 1;// right, layer j+1
+      const d = panelBase + (j+1)*2;    // left,  layer j+1
+      // Same shorter-diagonal-first split as before (purely cosmetic now that normals are analytic
+      // rather than face-derived, but kept for consistency); same outward winding too.
+      const dAC = distSqArr(positions,a,c), dBD = distSqArr(positions,b,d);
+      if(dAC <= dBD) indices.push(a,c,b, a,d,c);
+      else indices.push(a,d,b, b,d,c);
     }
   }
 
   const sideGeo = new THREE.BufferGeometry();
   sideGeo.setAttribute('position', new THREE.Float32BufferAttribute(positions, 3));
+  sideGeo.setAttribute('normal', new THREE.Float32BufferAttribute(normals, 3));
   sideGeo.setIndex(indices);
-  sideGeo.computeVertexNormals();
 
   // caps via shoelace-safe fan/earcut triangulation (handles the star's concave verts)
   const shapePts = profile.map(p => new THREE.Vector2(p[0], p[1]));
@@ -1394,7 +1461,7 @@ function buildDeformedGeometry(profile, height, segs, mode, params){
   const bottomCap = buildCap(0, false);
   const topCap = buildCap(height, true);
 
-  return { sideGeo, bottomCap, topCap, layerPositions: positions, segs, n };
+  return { sideGeo, bottomCap, topCap, layerPositions, segs, n };
 }
 
 // Sweeps a generator curve through true helical motion instead of extruding-then-deforming a
@@ -1549,23 +1616,24 @@ function rebuild(){
 
   lastBuild = { mode: state.mode, profile, params, h, closed, n };
 
-  // flatShading:true (not the default smooth/Gouraud shading): each deformed quad's two triangles
-  // meet at a real dihedral crease (v1.2.0 picks the shorter diagonal per quad to minimize it, but
-  // it isn't zero, and which diagonal is shorter varies quad to quad). Smooth shading averages
-  // vertex normals ACROSS that crease using whichever triangles happen to share each vertex —
-  // since neighboring quads can pick opposite diagonal directions, that averaging blends together
-  // inconsistently-oriented facets and produces a false herringbone/"pinched" light pattern that
-  // doesn't correspond to any real edge. Flat shading renders each triangle with its own true
-  // normal instead, which is also the geometrically honest choice for a surface that actually is
-  // faceted — raising the resolution slider is what makes it look smoother, not normal-blending.
+  // v1.14.2 replaced flat shading (each triangle its own face normal) with analytic per-vertex
+  // normals for twist/taper/shear/bend/ffd — computed directly from the deformation's own tangent
+  // vectors (buildDeformedGeometry), not from Three.js's face-averaging computeVertexNormals(),
+  // so the earlier herringbone bug (v1.12.2, caused by averaging across a per-quad diagonal choice
+  // that flips direction quad to quad) can't recur, while also removing the flat-shaded Mach-band
+  // striping that was visible as fine horizontal lines at high resolution — that striping was a
+  // real, separate issue from the slice-ring z-fighting fixed earlier in v1.14.2, not the same bug.
+  // Helix still builds shared-vertex geometry (buildHelicalGeometry, unchanged), so it keeps flat
+  // shading to avoid reintroducing the herringbone pattern there.
   const material = new THREE.MeshStandardMaterial({
-    color: 0x7d92a0, metalness:0.05, roughness:0.65, flatShading: true,
+    color: 0x7d92a0, metalness:0.05, roughness:0.65, flatShading: state.mode === 'helix',
     side: THREE.DoubleSide, wireframe: state.overlays.wireframe
   });
   const capMaterial = new THREE.MeshStandardMaterial({
     color: 0x64788a, metalness:0.05, roughness:0.7, flatShading: true,
     side: THREE.DoubleSide, wireframe: state.overlays.wireframe
   });
+
 
   const sideMesh = new THREE.Mesh(sideGeo, material);
   solidGroup.add(sideMesh);
