@@ -4,6 +4,18 @@ Interactive explorer of architectural deformation operations — twisting, taper
 Joe.K · axisbim.io
 
 CHANGELOG
+v1.10.1 - 2026-07-18 - Fixed the v1.10.0 .sat export failing to import in Revit 2016. Two record
+         fields had been left as null ($-1) where two independently-sourced, directly-quoted real
+         ACIS SAT examples both show an actual populated pointer: EDGE's back-reference to one of
+         its coedges, and VERTEX's back-reference to one of its edges — both now point to a real
+         record. Also dropped a speculative trailing "convexity" token on EDGE that isn't present
+         in the one directly-observed EDGE record I have (Spatial's own ACIS 4.0 doc example is
+         exactly 6 tokens, no 7th field); the earlier version added that token by inference from a
+         field list, not from a record actually seen in the wild. A single malformed/under-linked
+         entity is a plausible reason a strict reader imports nothing rather than partially
+         importing. Re-verified structurally (pointer resolution, coedge partner symmetry, backref
+         type-correctness) against both a closed-cube and an open-strip mesh; still not tested
+         against a live ACIS kernel or Revit itself.
 v1.10.0 - 2026-07-18 - Added "Export as .sat" (ACIS solid, sidebar Export section) — exports the
          current mode's mesh as a faceted ACIS body: every on-screen triangle becomes one exact
          planar ACIS face (no curve-fitting, since buildDeformedGeometry/buildHelicalGeometry
@@ -615,7 +627,7 @@ v1.0.0 - 2026-07-17 - Initial build. Twist operation on four cross-section prese
 <script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
 <script src="https://cdn.jsdelivr.net/npm/three@0.128.0/examples/js/controls/OrbitControls.js"></script>
 <script>
-const APP_VERSION = '1.10.0';
+const APP_VERSION = '1.10.1';
 
 // ---------- toast ----------
 let toastTimer=null;
@@ -2106,17 +2118,33 @@ function buildSatText(){
   }
 
   // edges / straight-curves
+  // Both back-reference pointer fields below (edge->coedge, vertex->edge) were previously written
+  // as $-1. Two real, directly-quoted ACIS SAT examples (Spatial's own v4.0 doc example, and an
+  // independently-sourced worked cube file) both show these fields populated with an actual
+  // pointer, not null — and the same v4.0 example shows EDGE as exactly 6 tokens (attrib, start_v,
+  // end_v, coedge, curve, sense), with NO trailing convexity token. The previous version had both
+  // wrong: a stray 7th token here, and null where a real pointer belongs on both EDGE and VERTEX.
+  // Likely why nothing imported in Revit — a strict ACIS reader can reject the whole file on a
+  // single malformed/under-connected entity rather than skipping just that record.
   edgeRegistry.forEach(rec=>{
-    setLine(rec.edgeId, `edge $-1 $${vertexIds[rec.v1]} $${vertexIds[rec.v2]} $-1 $${rec.curveId} forward unknown #`);
+    const firstUse = rec.uses[0];
+    const backCoedge = coedgeIds[firstUse.tri][firstUse.slot];
+    setLine(rec.edgeId, `edge $-1 $${vertexIds[rec.v1]} $${vertexIds[rec.v2]} $${backCoedge} $${rec.curveId} forward #`);
     const p1 = verts[rec.v1], p2 = verts[rec.v2];
     let dx=p2[0]-p1[0], dy=p2[1]-p1[1], dz=p2[2]-p1[2];
     const len = Math.hypot(dx,dy,dz) || 1;
     setLine(rec.curveId, `straight-curve $-1 ${satNum(p1[0])} ${satNum(p1[1])} ${satNum(p1[2])} ${satNum(dx/len)} ${satNum(dy/len)} ${satNum(dz/len)} I I #`);
   });
 
-  // vertices / points
+  // vertices / points — vertexEdgeBack[i]: any one edge incident to welded vertex i (populated
+  // below, same fix as EDGE above).
+  const vertexEdgeBack = new Array(verts.length).fill(-1);
+  edgeRegistry.forEach(rec=>{
+    if(vertexEdgeBack[rec.v1] === -1) vertexEdgeBack[rec.v1] = rec.edgeId;
+    if(vertexEdgeBack[rec.v2] === -1) vertexEdgeBack[rec.v2] = rec.edgeId;
+  });
   for(let i=0;i<verts.length;i++){
-    setLine(vertexIds[i], `vertex $-1 $-1 $${pointIds[i]} #`);
+    setLine(vertexIds[i], `vertex $-1 $${vertexEdgeBack[i]} $${pointIds[i]} #`);
     const p = verts[i];
     setLine(pointIds[i], `point $-1 ${satNum(p[0])} ${satNum(p[1])} ${satNum(p[2])} #`);
   }
