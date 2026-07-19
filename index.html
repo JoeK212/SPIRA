@@ -4,6 +4,23 @@ Interactive explorer of architectural deformation operations — twisting, taper
 Joe.K · axisbim.io
 
 CHANGELOG
+v1.32.0 - 2026-07-18 - Fit-and-finish pass, audited for issues rather than waiting on another
+         report. Found and fixed one real gap: the mobile breakpoint (max-width 760px) scales down
+         #hud and #viewControls but #warpLegend (added v1.26.0, after that breakpoint already
+         existed) never got the same treatment — on a narrow phone, where the viewport itself is
+         already squeezed (aside takes up to 46vh at the bottom), the legend's full-size 150px bar
+         could crowd the Top/Front/Home buttons sharing the same bottom row. Now shrinks alongside
+         everything else at that breakpoint. Also verified (not just assumed) several related areas
+         while auditing: Helix Line generator's open (2-point, 1-edge) profile subdivides correctly
+         under panel warp's new subdivision slider (headless-checked, not just the closed-polygon
+         case already verified in v1.28.0); FFD handle dragging is unaffected by Panel flatness
+         hiding the solid, since handles raycast against their own array in overlayGroup, never the
+         solid itself; Reset Values intentionally leaves panel subdivision untouched, consistent
+         with how it already leaves every overlay toggle untouched (a view/analysis preference, not
+         a deformation parameter) — confirmed as by-design rather than an oversight. Minor comment
+         accuracy fix: a v1.27.0 comment referenced "frameCameraDefault()'s Box3 fit" specifically,
+         written before v1.31.0 split that into a shared fitBoxDistance() serving all three view
+         buttons — updated to match.
 v1.31.0 - 2026-07-18 - Fixed a real framing bug user reported/screenshotted on Front view: a
          tall/narrow building (The Shard's Taper case study, 1015.7ft tall on a 91.9ft footprint)
          filled the viewport almost edge-to-edge vertically with no padding margin, while leaving
@@ -921,6 +938,12 @@ v1.0.0 - 2026-07-17 - Initial build. Twist operation on four cross-section prese
     aside{width:100%; border-left:none; border-top:1px solid var(--line); max-height:46vh;}
     #hud{font-size:0.72rem; max-width:220px;}
     #viewControls button{padding:6px 9px; font-size:0.68rem;}
+    /* v1.32.0: #warpLegend was added (v1.26.0) after this breakpoint existed and never got scaled
+       down with everything else — on a narrow phone the viewport itself is already squeezed (aside
+       takes up to 46vh at the bottom), so the legend's full 150px bar could crowd the Top/Front/Home
+       buttons sharing the same bottom row. */
+    #warpLegend{ left:8px; bottom:8px; padding:7px 9px; font-size:0.66rem; }
+    #warpLegend .warpLegendBar, #warpLegend .warpLegendTicks{ width:110px; }
   }
 </style>
 </head>
@@ -1222,7 +1245,7 @@ v1.0.0 - 2026-07-17 - Initial build. Twist operation on four cross-section prese
 <script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
 <script src="https://cdn.jsdelivr.net/npm/three@0.128.0/examples/js/controls/OrbitControls.js"></script>
 <script>
-const APP_VERSION = '1.31.0';
+const APP_VERSION = '1.32.0';
 
 // ---------- toast ----------
 let toastTimer=null;
@@ -2402,8 +2425,8 @@ function rebuild(){
   // describing), hide the solid itself while Panel flatness is on — the color-coded panels already
   // cover the same surface at real floor/edge resolution, so nothing readable is lost, and there's
   // no longer any coincident geometry left to fight with. Still added to solidGroup (not skipped)
-  // so frameCameraDefault()'s Box3 fit — which traverses solidGroup regardless of .visible — still
-  // sees it and frames correctly even while hidden.
+  // so fitBoxDistance() — which traverses solidGroup regardless of .visible, and backs all three
+  // view buttons (v1.31.0) — still sees it and frames correctly even while hidden.
   const hideSolid = state.overlays.panelwarp;
   sideMesh.visible = !hideSolid;
   if(capMeshA) capMeshA.visible = !hideSolid;
