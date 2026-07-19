@@ -2064,6 +2064,12 @@ const state = {
   morphToPreset: 'ellipse',
   morphToWidthM: 2.0,
   morphToDepthM: 2.0,
+  // v1.51.2: separate from the height-based blend itself (computeLayerPoint's morph branch always
+  // fully blends by y=h) — this is purely how FAR that blend reaches, so Play/Pause has something to
+  // animate 0->1 the same way Twist animates α_max 0->dialed-in. 1.0 = the full configured morph
+  // (identical rendering to before this field existed); not exposed as its own slider in this
+  // release, only reachable via animation.
+  morphBlend: 1.0,
   units: 'metric',       // 'metric' | 'imperial' — display only; geometry is always stored in meters
   projection: 'perspective', // v1.38.0: 'perspective' | 'orthographic' — Top/Front/Home were true
                               // to their view DIRECTION but still perspective-projected, so even a
@@ -2448,11 +2454,15 @@ function computeLayerPoint(mode, params, y, h, p){
   }
   if(mode === 'morph'){
     // p = [fromX, fromZ, toX, toZ] (see buildMorphProfile) — a straight lerp per level, height-
-    // linear same as Taper/Shear's own primary parameter. subdivideProfileForPanels' generic
-    // element-wise interpolation (v1.51.0) keeps this 4-tuple shape intact even for the finer
-    // panel-subdivision points it generates, so panel warp and higher-res exports blend correctly
-    // too, not just the named corners.
-    const t = y/h;
+    // linear same as Taper/Shear's own primary parameter, scaled by params.blend (v1.51.2) so
+    // Play/Pause has a 0->1 quantity to animate the same way every other mode does; blend defaults
+    // to 1 (full morph, exactly the original behavior) whenever a caller doesn't supply one — the
+    // isolated math tests that verified this branch predate params.blend and call with `{}`.
+    // subdivideProfileForPanels' generic element-wise interpolation (v1.51.0) keeps this 4-tuple
+    // shape intact even for the finer panel-subdivision points it generates, so panel warp and
+    // higher-res exports blend correctly too, not just the named corners.
+    const blend = params.blend === undefined ? 1 : params.blend;
+    const t = (y/h) * blend;
     return [ p[0] + (p[2]-p[0])*t, y, p[1] + (p[3]-p[1])*t ];
   }
   const angleDeg = (y/h) * params.alphaMax;
@@ -2470,6 +2480,7 @@ function paramsForMode(mode){
   return mode === 'taper' ? { V: state.taperV, W: state.taperW }
     : mode === 'shear' ? { DX: state.shearDXM, DY: state.shearDYM }
     : mode === 'bend' ? { betaMax: state.bendBetaMax }
+    : mode === 'morph' ? { blend: state.morphBlend }
     : { alphaMax: state.alphaMax }; // twist
 }
 
@@ -4785,7 +4796,7 @@ const MODE_DEFAULTS = {
   shear: { shearDXM: 3.0, shearDYM: 1.0, floors: 8, floorHeightM: 3.5, footprintWidthM: 2.0, footprintDepthM: 2.0 },
   bend: { bendBetaMax: 180, floors: 8, floorHeightM: 3.5, footprintWidthM: 2.0, footprintDepthM: 2.0 },
   helix: { helixGenerator: 'line', helixTurns: 3, helixPitchM: 3.0, helixRInnerM: 0.3, helixROuterM: 2.2, helixTubeRM: 0.25, helixTubeOffsetM: 1.5 },
-  morph: { preset: 'square', footprintWidthM: 2.0, footprintDepthM: 2.0, morphToPreset: 'ellipse', morphToWidthM: 2.0, morphToDepthM: 2.0, floors: 8, floorHeightM: 3.5 },
+  morph: { preset: 'square', footprintWidthM: 2.0, footprintDepthM: 2.0, morphToPreset: 'ellipse', morphToWidthM: 2.0, morphToDepthM: 2.0, morphBlend: 1.0, floors: 8, floorHeightM: 3.5 },
 };
 function resetModeValues(mode){
   if(animPlayer) stopAnimation();
@@ -5004,6 +5015,13 @@ const ANIMATABLE_PARAMS = {
   // 0 turns would degenerate to a zero-length sweep; a small non-zero floor keeps the geometry
   // well-defined at the very start of the loop instead of a one-frame flash of nothing.
   helix: [{key:'helixTurns', from:0.05}],
+  // v1.51.2: animates morphBlend, NOT the To-shape/To-size fields directly — 0 means "no blend at
+  // any height" (a straight extrusion of the FROM shape, the same kind of neutral start every other
+  // mode's animation uses), 1 is the fully configured morph. Letting Play ping-pong the FROM-size's
+  // own extrusion into the real TO shape and back is a genuinely legible "watch it morph" animation,
+  // unlike trying to animate morphToWidthM/DepthM toward some computed neutral (which wouldn't even
+  // BE neutral whenever fromPreset !== toPreset — the shapes differ regardless of matched sizing).
+  morph: [{key:'morphBlend', from:0}],
 };
 const ANIM_HALF_CYCLE_MS = 2200; // one direction of the ping-pong; full loop is double this
 let animPlayer = null; // null when not animating
@@ -5012,14 +5030,6 @@ function easeInOutCubic(t){ return t < 0.5 ? 4*t*t*t : 1 - Math.pow(-2*t+2, 3)/2
 
 const playPauseBtn = document.getElementById('playPauseBtn');
 function startAnimation(){
-  if(state.mode === 'morph'){
-    // Morph has no single 0->dialed-in scalar the way every axis-based mode does — its "parameter"
-    // IS height itself (see computeLayerPoint's morph branch), so there's nothing separate to
-    // ping-pong against. Explicit toast rather than a silent no-op, same reasoning as FFD's
-    // no-offset-yet guard just below.
-    toast('Morph has no animatable parameter — height itself drives the blend');
-    return;
-  }
   if(state.mode === 'ffd'){
     // Free has no single scalar deformation parameter the way every other mode does — 8
     // independently-draggable control points instead. "Animate toward the current target" still
