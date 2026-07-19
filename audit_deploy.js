@@ -328,6 +328,32 @@ check('sidebar width is clamped (min 260px, max the lesser of 640px or 60vw) rat
     return !!m && m[0].includes('260') && m[0].includes('640') && m[0].includes('window.innerWidth * 0.6');
   })());
 
+/* ===================== v1.45.0 — theme pass ===================== */
+sectionHeader('v1.45.0 — theme pass');
+check('Inter/Space Grotesk/Space Mono are actually loaded via a Google Fonts <link>, not just referenced in CSS with nothing serving them',
+  /fonts\.googleapis\.com\/css2\?family=Inter[^"]*Space\+Grotesk[^"]*Space\+Mono/.test(src));
+check('a favicon <link rel="icon"> exists (there wasn\'t one before)',
+  /<link rel="icon"/.test(src));
+check('.caveat class exists using --ochre (previously defined in :root but used nowhere) and is applied to both in-app case-study disclaimers, not just defined and orphaned',
+  /\.caveat\{[\s\S]*?color:var\(--ochre\)/.test(src) && (src.match(/class="caveat"/g) || []).length >= 2);
+check('the tolerance solver toggles .caveat on the result element for the not-achievable case specifically (not left on permanently, not applied to the success case)',
+  /resultEl\.classList\.add\('caveat'\)/.test(src) && /resultEl\.classList\.remove\('caveat'\)/.test(src));
+check('[data-theme="dark"] overrides all 8 root color variables (a partial override would leave some elements light-themed and others dark, an inconsistent mix)',
+  (function(){
+    const m = src.match(/\[data-theme="dark"\]\{[\s\S]*?\n  \}/);
+    if(!m) return false;
+    return ['--cream','--ink','--paper','--paper-rgb','--line','--brick','--prussian','--ochre','--muted'].every(v=>m[0].includes(v));
+  })());
+check('no hardcoded #fff remains for the active preset-button background or the toggle switch\'s on-state knob (both would go low-contrast against Blueprint\'s lighter --prussian)',
+  !/background:#fff/.test(src.match(/\.preset-btn\.active\{[^}]*\}/)?.[0] || '') &&
+  !/background:#fff/.test(src.match(/\.switch\.on::after\{[^}]*\}/)?.[0] || ''));
+check('the three former hardcoded rgba(251,250,246,...) translucent backgrounds (HUD/view-controls/warp-legend) now use the theme-aware --paper-rgb variable instead',
+  !/background:rgba\(251,250,246/.test(src) && (src.match(/background:rgba\(var\(--paper-rgb\)/g) || []).length === 3);
+check('groundGrid is added to `scene` directly, not solidGroup/overlayGroup — both camera-fit functions (frameCameraDefault/fitBoxDistance) scope their Box3 to solidGroup only, so a grid living inside solidGroup would blow up every camera fit to a 300-unit box instead of the model',
+  /scene\.add\(groundGrid\)/.test(src) && !/solidGroup\.add\(groundGrid\)|overlayGroup\.add\(groundGrid\)/.test(src));
+check('applyTheme() disposes the previous groundGrid\'s geometry and material before replacing it on every theme switch (GridHelper\'s two-tone color is baked into per-vertex color attributes at construction, so switching theme means building a new one, not recoloring in place — and the old one must not leak)',
+  /groundGrid\.geometry\.dispose\(\)/.test(src) && /groundGrid\.material\.dispose\(\)/.test(src));
+
 /* ===================== Summary ===================== */
 console.log(`\n${BOLD}${'-'.repeat(40)}${RESET}`);
 console.log(`${GREEN}${pass} passed${RESET}, ${fail ? RED : DIM}${fail} failed${RESET}`);

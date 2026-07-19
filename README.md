@@ -159,12 +159,13 @@ genuine curved, pickable face per side. Run the script with a Conceptual Mass fa
 active for a real, loadable Mass Family, or with a project active for a one-off element. See
 `EXTENDED.md` for the full pipeline.
 
-**Sidebar: Simple/Advanced &amp; resizing.** The View toggle at the top switches between Simple
-(Operation, Cross-section, Deformation parameters, Reference — just the shape) and Advanced (adds
-Units, Projection, resolution, Overlays, and Export) — the same sections hide or show no matter
-which Operation is active. Drag the handle at the sidebar's left edge to resize it. Both choices are
-remembered for next time, kept separate from the model itself so they're not swept into "Copy share
-link" or reset by Reset Values.
+**Sidebar: Simple/Advanced, theme, &amp; resizing.** The View toggle at the top switches between
+Simple (Operation, Cross-section, Deformation parameters, Reference — just the shape) and Advanced
+(adds Units, Projection, resolution, Overlays, and Export) — the same sections hide or show no matter
+which Operation is active. A second toggle switches between the default paper theme and a dark
+"Blueprint" theme (pale linework on deep blue, after the architectural-drawing convention). Drag the
+handle at the sidebar's left edge to resize it. All three choices are remembered for next time, kept
+separate from the model itself so they're not swept into "Copy share link" or reset by Reset Values.
 
 Single HTML file, no build step, Three.js (r128) via CDN. Deployed via GitHub → Netlify
 continuous deployment.

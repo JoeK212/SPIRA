@@ -4,6 +4,36 @@ Interactive explorer of architectural deformation operations — twisting, taper
 Joe.K · axisbim.io
 
 CHANGELOG
+v1.45.0 - 2026-07-19 - Theme pass, per user request to look at "the entire theme design... what else
+         can we do." Checked the actual CSS rather than guessing, which turned up two real gaps
+         before any new feature work: 'Inter'/'Space Grotesk'/'Space Mono' were referenced throughout
+         the stylesheet but never loaded via any <link> or @font-face, so every declaration was
+         silently falling back to system fonts; and --ochre was defined in :root but used nowhere.
+         Three changes, all chosen by the user from a set of options:
+         (1) Loaded the actual fonts (Google Fonts, weights matched to what the CSS already asks
+         for). Added a small inline SVG favicon (there wasn't one). Gave ochre exactly one
+         consistent role — a new .caveat class (ochre text + left border) — applied to the two
+         in-app "illustrative estimate, not sourced" case-study disclaimers and the tolerance
+         solver's "not achievable" message, kept separate from --brick (errors/active state) and
+         --prussian (data/formula), not just decoration.
+         (2) "Blueprint" dark theme — literal architectural-blueprint convention (pale linework on
+         deep blue paper), not a generic inverted dark mode. New "Light"/"Blueprint" toggle in the
+         View section, `[data-theme="dark"]` CSS variable overrides so every DOM color updates
+         automatically. Along the way found two hardcoded #fff values (active preset-button
+         background, the toggle switch's on-state knob) that would have gone low-contrast against
+         Blueprint's lighter prussian — fixed both to the theme-aware --paper instead, and added a
+         --paper-rgb companion variable so the three HUD/legend translucent backgrounds (previously
+         hardcoded rgba(251,250,246,...)) theme correctly too. Kept in uiPrefs (not `state`), same
+         reasoning as v1.44.0's uiMode/sidebarWidthPx — a screen preference, not part of the building
+         a share link hands someone.
+         (3) Graph-paper ground grid — THREE.GridHelper (not a CanvasTexture-as-scene.background,
+         to sidestep that technique's version/mapping-dependent tiling behavior) sitting in `scene`
+         directly, not solidGroup/overlayGroup, confirmed safe against both camera-fit functions
+         (frameCameraDefault/fitBoxDistance both already scope to solidGroup only, not the whole
+         scene) and against every overlay/Simple-Advanced toggle. Regenerated (not just recolored)
+         on every theme switch, since GridHelper's two-tone color comes from per-vertex color
+         attributes set at construction, not a material property that can be reassigned after the
+         fact. Added 9 new audit_deploy.js checks (75/75 passing).
 v1.44.0 - 2026-07-19 - Sidebar overhaul, per user feedback: "the right side panel is getting clunky
          un organized... simple and advanced mode - each mode needs to be consistent... also this
          panel should be stretchable." Two independent changes:
@@ -877,16 +907,39 @@ v1.0.0 - 2026-07-17 - Initial build. Twist operation on four cross-section prese
 <meta name="description" content="Interactive explorer of architectural deformation operations — twisting, tapering, shearing, bending, freeform (FFD), and helical sweeps — with a live solid and volume/area readout.">
 <meta name="theme-color" content="#f4f1ea" id="themeColorMeta">
 <title>SPIRA — Deformation Geometry Explorer</title>
+<!-- v1.45.0: Inter/Space Grotesk/Space Mono were referenced throughout the CSS below but never
+     actually loaded — every declaration was silently falling back to system fonts. -->
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=Space+Grotesk:wght@500;600;700&family=Space+Mono:wght@400;700&display=swap" rel="stylesheet">
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'%3E%3Crect width='100' height='100' fill='%23f4f1ea'/%3E%3Cpolygon points='50,8 92,50 50,92 8,50' fill='none' stroke='%231f4e79' stroke-width='5'/%3E%3Cpolygon points='50,26 74,50 50,74 26,50' fill='%23b23a2e'/%3E%3C/svg%3E">
 <style>
   :root{
     --cream:#f4f1ea;
     --ink:#1a1a18;
     --paper:#fbfaf6;
+    --paper-rgb:251,250,246;
     --line:#d8d3c4;
     --brick:#b23a2e;
     --prussian:#1f4e79;
     --ochre:#c8932a;
     --muted:#7a7568;
+  }
+  /* v1.45.0: "Blueprint" dark theme — literal architectural blueprint convention (pale linework on
+     deep blue paper) rather than a generic inverted dark mode, since that's the theme this tool is
+     already drawing on. --prussian and --brick both get lightened here, not just --cream/--ink
+     inverted: the original prussian blue and brick red were tuned for contrast against a pale cream
+     background, and would read as near-invisible against a background that's itself a deep blue. */
+  [data-theme="dark"]{
+    --cream:#0b3350;
+    --ink:#eaf3fa;
+    --paper:#0e3d5e;
+    --paper-rgb:14,61,94;
+    --line:#2f5878;
+    --brick:#ff6b57;
+    --prussian:#7fd1ff;
+    --ochre:#f2b544;
+    --muted:#9fb8cc;
   }
   *{box-sizing:border-box; -webkit-tap-highlight-color:transparent;}
   html,body{margin:0; height:100%; overscroll-behavior-y:contain;}
@@ -904,6 +957,14 @@ v1.0.0 - 2026-07-17 - Initial build. Twist operation on four cross-section prese
     font-weight:600; letter-spacing:-0.01em; margin:0;
   }
   .mono{font-family:'Space Mono', monospace;}
+  /* v1.45.0: --ochre was defined but never used anywhere — reserved here for exactly one
+     recurring, semantically distinct role: "this figure is an illustrative estimate, not a sourced
+     one," as already described in prose throughout the case-study code and changelog. Kept separate
+     from --brick (errors/active state) and --prussian (primary data/formula), so ochre now means
+     one specific thing consistently, not a third arbitrary decoration. */
+  .caveat{
+    color:var(--ochre); border-left:2px solid var(--ochre); padding-left:8px;
+  }
 
   header{
     display:flex; align-items:baseline; gap:14px;
@@ -929,7 +990,7 @@ v1.0.0 - 2026-07-17 - Initial build. Twist operation on four cross-section prese
 
   #hud{
     position:absolute; left:14px; top:14px;
-    background:rgba(251,250,246,0.92);
+    background:rgba(var(--paper-rgb),0.92);
     border:1px solid var(--line);
     padding:10px 14px;
     font-size:0.78rem; line-height:1.55;
@@ -946,7 +1007,7 @@ v1.0.0 - 2026-07-17 - Initial build. Twist operation on four cross-section prese
     display:flex; gap:6px;
   }
   #viewControls button{
-    background:rgba(251,250,246,0.92);
+    background:rgba(var(--paper-rgb),0.92);
     border:1px solid var(--line);
     color:var(--ink);
     font-family:inherit; font-size:0.72rem;
@@ -958,7 +1019,7 @@ v1.0.0 - 2026-07-17 - Initial build. Twist operation on four cross-section prese
 
   #warpLegend{
     position:absolute; left:14px; bottom:14px;
-    background:rgba(251,250,246,0.92);
+    background:rgba(var(--paper-rgb),0.92);
     border:1px solid var(--line);
     padding:9px 12px;
     font-size:0.72rem; line-height:1.4;
@@ -1019,7 +1080,7 @@ v1.0.0 - 2026-07-17 - Initial build. Twist operation on four cross-section prese
     font-family:inherit; color:var(--ink);
     display:flex; align-items:center; justify-content:center; gap:6px;
   }
-  .preset-btn.active{border-color:var(--brick); background:#fff; color:var(--brick);}
+  .preset-btn.active{border-color:var(--brick); background:var(--paper); color:var(--brick);}
   .preset-btn:hover{border-color:var(--ink);}
 
   .slider-row{margin-bottom:14px;}
@@ -1063,7 +1124,7 @@ v1.0.0 - 2026-07-17 - Initial build. Twist operation on four cross-section prese
     background:var(--paper); transition:left 0.12s;
   }
   .switch.on{background:var(--prussian);}
-  .switch.on::after{left:18px; background:#fff;}
+  .switch.on::after{left:18px; background:var(--paper);}
 
   select{
     width:100%; font-family:inherit; color:var(--ink); background:var(--cream);
@@ -1202,6 +1263,10 @@ v1.0.0 - 2026-07-17 - Initial build. Twist operation on four cross-section prese
         <button class="preset-btn" data-uimode="simple">Simple</button>
         <button class="preset-btn" data-uimode="advanced">Advanced</button>
       </div>
+      <div class="presets" id="themeGrid" style="margin-top:8px;">
+        <button class="preset-btn" data-themechoice="light">Light</button>
+        <button class="preset-btn" data-themechoice="dark">Blueprint</button>
+      </div>
     </section>
 
     <section class="group">
@@ -1260,7 +1325,7 @@ v1.0.0 - 2026-07-17 - Initial build. Twist operation on four cross-section prese
           <button class="btn secondary" data-casestudy="turningtorso" style="font-size:0.74rem;">Turning Torso</button>
           <button class="btn secondary" data-casestudy="cayantower" style="font-size:0.74rem;">Cayan Tower</button>
         </div>
-        <div style="font-size:0.68rem; color:var(--muted); line-height:1.4; margin-top:4px;">
+        <div style="font-size:0.68rem; line-height:1.4; margin-top:4px;" class="caveat">
           Height, floor count, and total twist are sourced figures; footprint size is an illustrative estimate.
         </div>
       </div>
@@ -1278,7 +1343,7 @@ v1.0.0 - 2026-07-17 - Initial build. Twist operation on four cross-section prese
           Case study (real tapering building)
         </div>
         <button class="btn secondary" data-casestudy="theshard" style="width:100%; font-size:0.74rem;">The Shard</button>
-        <div style="font-size:0.68rem; color:var(--muted); line-height:1.4; margin-top:4px;">
+        <div style="font-size:0.68rem; line-height:1.4; margin-top:4px;" class="caveat">
           Height and floor count are sourced; no published base/top footprint ratio was found, so the
           taper amount and footprint size are illustrative estimates matching its famous silhouette.
         </div>
@@ -1485,7 +1550,7 @@ v1.0.0 - 2026-07-17 - Initial build. Twist operation on four cross-section prese
 <script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
 <script src="https://cdn.jsdelivr.net/npm/three@0.128.0/examples/js/controls/OrbitControls.js"></script>
 <script>
-const APP_VERSION = '1.44.0';
+const APP_VERSION = '1.45.0';
 
 // ---------- toast ----------
 let toastTimer=null;
@@ -1532,9 +1597,9 @@ const HELP_HTML = `
   <p>The View toggle at the top of the sidebar switches between Simple (just the shape: Operation,
   Cross-section, Deformation parameters, Reference) and Advanced (adds Units, Projection, resolution,
   Overlays, and Export) — the same four sections hide or show no matter which Operation is selected.
-  Drag the thin handle at the sidebar's left edge to resize it; both this choice and the width are
-  remembered for next time, separately from the model itself, so they're not included if you use
-  "Copy share link."</p>
+  Light/Blueprint switches between the default paper theme and a dark architectural-blueprint theme.
+  Drag the thin handle at the sidebar's left edge to resize it; all three choices are remembered for
+  next time, separately from the model itself, so they're not included if you use "Copy share link."</p>
 
   <h4>Operations</h4>
   <p>The six buttons at the top of the sidebar switch which deformation is applied to the
@@ -3598,12 +3663,13 @@ const projectionGrid = document.getElementById('projectionGrid');
 // preferences, not part of "the model configuration" the way mode/preset/deformation params are.
 // A share link is supposed to hand someone else your BUILDING, not force your sidebar width or
 // Simple/Advanced choice onto their screen. Persisted separately under its own localStorage key.
-const uiPrefs = { uiMode: 'simple', sidebarWidthPx: 300 };
+const uiPrefs = { uiMode: 'simple', sidebarWidthPx: 300, theme: 'light' };
 try{
   const savedUI = JSON.parse(localStorage.getItem('spira-ui-prefs') || 'null');
   if(savedUI){
     if(savedUI.uiMode === 'simple' || savedUI.uiMode === 'advanced') uiPrefs.uiMode = savedUI.uiMode;
     if(Number.isFinite(savedUI.sidebarWidthPx)) uiPrefs.sidebarWidthPx = savedUI.sidebarWidthPx;
+    if(savedUI.theme === 'light' || savedUI.theme === 'dark') uiPrefs.theme = savedUI.theme;
   }
 }catch(e){}
 function persistUIPrefs(){
@@ -3635,6 +3701,53 @@ const uiModeGrid = document.getElementById('uiModeGrid');
   });
 });
 applyUIMode(uiPrefs.uiMode);
+
+// ---------- theme: Light / Blueprint (v1.45.0) ----------
+// Same "not part of the model" reasoning as uiMode/sidebarWidthPx above — a screen preference,
+// persisted in the same uiPrefs object/localStorage key, excluded from Reset Values and the
+// shareable-URL encoding. CSS custom properties handle every DOM color automatically via the
+// [data-theme="dark"] override block; the two things CSS can't reach are the Three.js scene
+// background and the ground-grid helper below, so those are kept in sync here explicitly.
+const THEME_COLORS = {
+  light: { sceneBg: 0xf4f1ea, gridLine: 0xd8d3c4, metaThemeColor: '#f4f1ea' },
+  dark:  { sceneBg: 0x0b3350, gridLine: 0x2f5878, metaThemeColor: '#0b3350' },
+};
+// "Graph-paper" ground grid — a literal drafting-table grid the model sits on, not a flat screen-space
+// backdrop. Chosen over a CanvasTexture-as-scene.background approach specifically to sidestep that
+// technique's tiling/repeat behavior being version- and mapping-dependent in three.js; THREE.GridHelper
+// is a single well-defined built-in primitive with no such ambiguity. Lives directly in `scene` (NOT
+// overlayGroup), so Simple/Advanced view and every Overlays toggle leave it alone — it's theme, not
+// data. 300 world-unit extent / 60 divisions = 5-unit cells, comfortably covers the largest footprint
+// the sliders allow (30m/100ft max, see syncFootprintSliderRange) with generous margin either side.
+let groundGrid = null;
+function buildGroundGrid(theme){
+  const g = new THREE.GridHelper(300, 60, THEME_COLORS[theme].gridLine, THEME_COLORS[theme].gridLine);
+  g.material.transparent = true;
+  g.material.opacity = 0.35;
+  g.position.y = -0.05; // nudged below y=0 so it never z-fights with Base plane B or floor lines
+  return g;
+}
+function applyTheme(theme){
+  uiPrefs.theme = theme;
+  if(theme === 'dark') document.documentElement.setAttribute('data-theme', 'dark');
+  else document.documentElement.removeAttribute('data-theme');
+  document.getElementById('themeColorMeta').setAttribute('content', THEME_COLORS[theme].metaThemeColor);
+  scene.background = new THREE.Color(THEME_COLORS[theme].sceneBg);
+  if(groundGrid){ scene.remove(groundGrid); groundGrid.geometry.dispose(); groundGrid.material.dispose(); }
+  groundGrid = buildGroundGrid(theme);
+  scene.add(groundGrid);
+  [...themeGrid.children].forEach(b=>b.classList.toggle('active', b.dataset.themechoice === theme));
+  persistUIPrefs();
+}
+const themeGrid = document.getElementById('themeGrid');
+[...themeGrid.children].forEach(btn=>{
+  btn.addEventListener('click', ()=>{
+    if(btn.dataset.themechoice === uiPrefs.theme) return;
+    applyTheme(btn.dataset.themechoice);
+    toast(uiPrefs.theme === 'dark' ? 'Blueprint theme' : 'Light theme');
+  });
+});
+applyTheme(uiPrefs.theme);
 
 // ---------- resizable sidebar (v1.44.0) ----------
 // Drag #sidebarResizeHandle to resize <aside> via a CSS variable rather than fighting flexbox's own
@@ -3873,6 +3986,7 @@ toleranceTargetSlider.addEventListener('input', e=>{
   state.toleranceTargetMM = parseInt(e.target.value);
   syncToleranceTargetLabel();
   persist();
+  document.getElementById('toleranceSolverResult').classList.remove('caveat');
   document.getElementById('toleranceSolverResult').textContent = ''; // stale once the target moves
 });
 
@@ -3888,7 +4002,7 @@ toleranceTargetSlider.addEventListener('input', e=>{
 // request, not continuously.
 function solveTolerance(){
   const resultEl = document.getElementById('toleranceSolverResult');
-  if(!lastBuild){ resultEl.textContent = 'Nothing to solve yet'; return; }
+  if(!lastBuild){ resultEl.classList.remove('caveat'); resultEl.textContent = 'Nothing to solve yet'; return; }
   const { mode, profile, h, closed, n, segs, evalPoint } = lastBuild;
   const loopCount = mode === 'helix' ? segs : state.floors;
   const stepM = mode === 'helix' ? h/segs : state.floorHeightM;
@@ -3903,6 +4017,7 @@ function solveTolerance(){
     if(found === null && maxWarpMM <= state.toleranceTargetMM) found = N;
   }
   if(found !== null){
+    resultEl.classList.remove('caveat');
     resultEl.innerHTML = `Use <strong>${found}</strong> panel${found===1?'':'s'} per face to stay under ${targetDisp}. ` +
       `<a href="#" id="applyToleranceBtn" style="text-decoration:underline; cursor:pointer; color:var(--prussian);">Apply</a>`;
     document.getElementById('applyToleranceBtn').addEventListener('click', (e)=>{
@@ -3913,6 +4028,7 @@ function solveTolerance(){
       persist(); rebuild();
     });
   } else {
+    resultEl.classList.add('caveat');
     resultEl.textContent = `Not achievable up to 12 panels/face — best is ${toDisplaySmallLen(bestMM/1000).toFixed(1)}${u2} at ${bestN} panels. Try a looser target.`;
   }
 }
