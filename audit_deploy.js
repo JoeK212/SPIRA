@@ -246,6 +246,16 @@ check('shareable-URL parsing runs before the slider/DOM sync block that reads fr
     return urlIdx !== -1 && sliderSyncIdx !== -1 && urlIdx < sliderSyncIdx;
   })());
 
+/* ===================== v1.41.0 — Capital Gate case study removed ===================== */
+// Removed as a genuine geometric mismatch (compound shape-change + curve, not just nonlinear
+// lean) — same bar Shanghai Tower/The Bow were already rejected on. Checks it stays gone rather
+// than silently reappearing in a future edit.
+sectionHeader('v1.41.0 — Capital Gate case study removed');
+check('capitalgate is not a key in CASE_STUDIES', !/capitalgate:\s*\{/.test(src));
+check('no "Capital Gate" case-study button remains in the sidebar markup', !/data-casestudy="capitalgate"/.test(src));
+check('Shear\'s case-study UI block was removed along with it, not just the button (no orphaned "Case study (real leaning building)" label)',
+  !/Case study \(real leaning building\)/.test(src));
+
 /* ===================== Summary ===================== */
 console.log(`\n${BOLD}${'-'.repeat(40)}${RESET}`);
 console.log(`${GREEN}${pass} passed${RESET}, ${fail ? RED : DIM}${fail} failed${RESET}`);

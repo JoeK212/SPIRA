@@ -4,6 +4,18 @@ Interactive explorer of architectural deformation operations — twisting, taper
 Joe.K · axisbim.io
 
 CHANGELOG
+v1.41.0 - 2026-07-19 - Removed Capital Gate as Shear's case study, per user feedback: "the two best
+         case study's samples are: turning torso and cayan tower. capital is not even close to what
+         the actual projects is in real life." Checked further rather than taking the caveat already
+         in place (nonlinear lean rate) as sufficient: the real building's floor plates don't just
+         lean, they change SHAPE and orientation with height ("curved triangular" to "curved
+         rectangular," per Skyscraper Center and RMJM's own case study), and its form is described as
+         curved/organic throughout — a genuinely different, compound deformation, not a straight
+         cross-section on a straight (if nonlinear) lean. That's the same bar Shanghai Tower and The
+         Bow already got rejected on; the original v1.17.0 caveat understated the actual mismatch.
+         Shear now has no case study, matching Bend and Helix. Updated README, EXTENDED.md's
+         rejected-case-studies reasoning is unaffected (Capital Gate documented inline in index.html
+         instead, next to where it was removed, since it wasn't in EXTENDED's rejection list before).
 v1.40.0 - 2026-07-19 - Added a shareable URL — third item on the feature-list priority order
          (tolerance solver, PNG export, then this). "Copy share link" (Export section) encodes the
          entire state object (mode, preset, every deformation parameter, footprint size, floors/
@@ -1206,15 +1218,6 @@ v1.0.0 - 2026-07-17 - Initial build. Twist operation on four cross-section prese
           <input type="range" id="shearDYSlider" min="-8" max="8" step="0.1" value="1">
         </div>
         <button class="btn secondary reset-btn" data-resetmode="shear" style="width:100%; margin-top:6px;">Reset values</button>
-        <div style="font-size:0.78rem; color:var(--muted); margin:14px 0 8px;">
-          Case study (real leaning building)
-        </div>
-        <button class="btn secondary" data-casestudy="capitalgate" style="width:100%; font-size:0.74rem;">Capital Gate</button>
-        <div style="font-size:0.68rem; color:var(--muted); line-height:1.4; margin-top:4px;">
-          Height, floor count, and total lean are sourced; footprint size is an illustrative estimate,
-          and the real lean isn't linear from the base the way this preset's shear is — see the app's
-          notes for that simplification.
-        </div>
       </div>
       <div id="bendParamsBlock" style="display:none;">
         <div class="slider-row">
@@ -1407,7 +1410,7 @@ v1.0.0 - 2026-07-17 - Initial build. Twist operation on four cross-section prese
 <script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
 <script src="https://cdn.jsdelivr.net/npm/three@0.128.0/examples/js/controls/OrbitControls.js"></script>
 <script>
-const APP_VERSION = '1.40.0';
+const APP_VERSION = '1.41.0';
 
 // ---------- toast ----------
 let toastTimer=null;
@@ -3823,6 +3826,17 @@ document.querySelectorAll('.reset-btn').forEach(btn=>{
 // Calgary curves in PLAN — a crescent footprint extruded straight up — not along its axis the way
 // Bend does; it was investigated and rejected for exactly this reason), doesn't get a preset just to
 // have more of them.
+//
+// v1.41.0: Capital Gate (RMJM, Abu Dhabi) was added in v1.17.0 as Shear's case study on the
+// strength of its sourced 18° lean, with an in-app caveat that the real lean isn't linear from the
+// base. Removed after user feedback ("not even close to what the actual project is in real life")
+// prompted a closer look: the real building's floor plates don't just lean — they change SHAPE and
+// orientation with height ("curved triangular" to "curved rectangular", per Skyscraper Center and
+// RMJM's own case study), and the form itself is described as curved/organic throughout, not a
+// straight-edged cross-section translated along a straight lean the way Shear models it. That's the
+// same compound-deformation mismatch that got Shanghai Tower and The Bow rejected — the original
+// caveat (nonlinear lean rate) understated how far off the geometry actually is. Shear has no case
+// study for now, same as Bend and Helix.
 const CASE_STUDIES = {
   turningtorso: {
     mode: 'twist', label: 'Turning Torso',
@@ -3833,16 +3847,6 @@ const CASE_STUDIES = {
     mode: 'twist', label: 'Cayan Tower',
     fields: { preset:'hexagon', alphaMax:90, floors:73, floorHeightM:306/73, footprintWidthM:22, footprintDepthM:22 },
     toast: 'Cayan Tower — 306m, 73 floors, 90° twist (SOM, Dubai, 2013)'
-  },
-  capitalgate: {
-    mode: 'shear', label: 'Capital Gate',
-    // 18° lean over 160m -> horizontal offset = 160*tan(18°) ≈ 52.0m, applied entirely in one
-    // direction (DY=0). One honest approximation worth naming: the real building's lean isn't
-    // linear from the base the way SPIRA's Shear is — floor plates stack straight up through
-    // roughly the 12th storey, and only lean (accelerating) above that — so this preset's constant
-    // linear shear is a simplification of the real, non-uniform lean profile, not a literal match.
-    fields: { preset:'square', shearDXM: -(160*Math.tan(18*Math.PI/180)), shearDYM:0, floors:35, floorHeightM:160/35, footprintWidthM:25, footprintDepthM:25 },
-    toast: 'Capital Gate — 160m, 35 floors, 18° lean (RMJM, Abu Dhabi, 2011)'
   },
   theshard: {
     mode: 'taper', label: 'The Shard',
