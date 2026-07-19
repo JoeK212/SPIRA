@@ -4,6 +4,22 @@ Interactive explorer of architectural deformation operations — twisting, taper
 Joe.K · axisbim.io
 
 CHANGELOG
+v1.36.0 - 2026-07-18 - Fit-and-finish list fully clear; started on the feature list (panel schedule
+         export, first). Added "Export panel schedule (.csv)", shown alongside the other Panel
+         flatness controls only while that overlay is on. One row per panel currently being
+         analyzed — panel_id, floor/turn index, edge index, width (mm and ft), warp (mm and in), a
+         severity label (green/amber/red, using the exact same 0/25/50mm thresholds warpColor()
+         renders with, so a row's label always matches the panel's on-screen color), and all 4
+         corner coordinates in the same Y-up->Z-up remap the loft-profiles JSON export already
+         uses, for direct usability in a CAD/BIM pipeline. Recomputes fresh from lastBuild via
+         computePanelWarp()/subdivideProfileForPanels() — the exact same functions, current
+         floors/floorHeightM (or Helix's segs/h), and current panelSubdiv the live overlay and HUD
+         already use — rather than a second implementation that could drift out of sync, the same
+         principle buildLoftProfilesJSON already followed. lastBuild now also stores segs (needed
+         for Helix's per-rebuild panel granularity, previously only a local variable inside
+         rebuild() itself). Verified headlessly before shipping: panel count matches floors x
+         (edges x subdivision) exactly (54 floors x 20 sub-edges = 1080 panels), and floor_index/
+         edge_index/width values match the already-verified Turning Torso subdivision numbers.
 v1.35.0 - 2026-07-18 - Added a "Colorblind-safe palette" toggle for Panel flatness (warp), the last
          real item on the fit-and-finish list (audit_deploy.js/Dynamo script consistency remains
          blocked without those files being re-uploaded). Default green->amber->red is exactly the
@@ -1245,6 +1261,7 @@ v1.0.0 - 2026-07-17 - Initial build. Twist operation on four cross-section prese
         <span>Colorblind-safe palette</span>
         <div class="switch" data-toggle="colorblindPalette"></div>
       </div>
+      <button class="btn secondary" id="exportPanelScheduleBtn" style="width:100%; margin-top:8px; display:none;">Export panel schedule (.csv)</button>
     </section>
 
     <section class="group">
@@ -1295,7 +1312,7 @@ v1.0.0 - 2026-07-17 - Initial build. Twist operation on four cross-section prese
 <script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
 <script src="https://cdn.jsdelivr.net/npm/three@0.128.0/examples/js/controls/OrbitControls.js"></script>
 <script>
-const APP_VERSION = '1.35.0';
+const APP_VERSION = '1.36.0';
 
 // ---------- toast ----------
 let toastTimer=null;
@@ -1383,7 +1400,9 @@ const HELP_HTML = `
   toggle switches the gradient from green/amber/red to Viridis' purple/teal/yellow, which reads
   correctly by brightness alone and doesn't rely on distinguishing red from green. The color scale
   (0–50mm) is illustrative, not a sourced tolerance spec — real limits vary by system and
-  manufacturer.</p>
+  manufacturer. "Export panel schedule (.csv)" exports one row per panel currently being
+  analyzed — width, warp, a severity label matching the on-screen color, and all 4 corner
+  coordinates in the same Z-up convention the loft-profiles export uses.</p>
 
   <h4>View navigation</h4>
   <p>Drag to orbit, scroll to zoom, right-drag (or two-finger drag) to pan. <strong>Top</strong>,
@@ -2439,7 +2458,7 @@ function rebuild(){
     ));
   }
 
-  lastBuild = { mode: state.mode, profile, params, h, closed, n, evalPoint: layerPointFn };
+  lastBuild = { mode: state.mode, profile, params, h, closed, n, segs, evalPoint: layerPointFn };
 
   // v1.23.0: a single "how big is the footprint, really" reference, computed from ONLY the first
   // (base) ring of layerPositions rather than the whole solid. Two bugs traced back to using the
@@ -3442,6 +3461,7 @@ function syncPanelwarpDependentUI(){
   document.getElementById('panelSubdivBlock').style.display = state.overlays.panelwarp ? '' : 'none';
   document.getElementById('wireframeRow').classList.toggle('disabled', state.overlays.panelwarp);
   document.getElementById('colorblindPaletteRow').style.display = state.overlays.panelwarp ? '' : 'none';
+  document.getElementById('exportPanelScheduleBtn').style.display = state.overlays.panelwarp ? '' : 'none';
 }
 syncPanelwarpDependentUI();
 
@@ -3630,6 +3650,64 @@ function exportLoftProfilesJSON(){
   toast(`Exported loft profiles — ${result.levelCount} levels`);
 }
 document.getElementById('exportLoftJsonBtn').addEventListener('click', exportLoftProfilesJSON);
+
+// ---------- panel schedule (.csv) export ----------
+// v1.36.0: a fabrication-usable schedule of every panel Panel flatness (warp) is currently
+// analyzing — one row per panel, with its real-world width, warp, a severity band matching the
+// overlay's own color thresholds, and all 4 corner coordinates (same Y-up->Z-up remap as the loft
+// profiles export, for the same reason: downstream CAD/BIM tools expect Z-up). Recomputes fresh
+// from lastBuild via computePanelWarp/subdivideProfileForPanels — the exact same functions and
+// inputs (current floors/floorHeightM or Helix segs, current panelSubdiv) the live overlay and HUD
+// use, so the export always matches what's on screen rather than risking a second, drifting
+// implementation of the same math (same principle buildLoftProfilesJSON follows above).
+function buildPanelScheduleCSV(){
+  if(!lastBuild) return null;
+  const { mode, profile, h, closed, n, segs, evalPoint } = lastBuild;
+  const loopCount = mode === 'helix' ? segs : state.floors;
+  const stepM = mode === 'helix' ? h/segs : state.floorHeightM;
+  const { subProfile, subN } = subdivideProfileForPanels(profile, n, closed, state.panelSubdiv);
+  const { panels } = computePanelWarp(subProfile, evalPoint, subN, closed, loopCount, stepM);
+  const MM = 1000;
+  const toRow = (p) => [p[0]*MM, -p[2]*MM, p[1]*MM].map(round6); // Y-up -> Z-up, same as loft export
+  const header = [
+    'panel_id','floor_index','edge_index','width_mm','width_ft','warp_mm','warp_in','severity',
+    'corner00_x_mm','corner00_y_mm','corner00_z_mm','corner01_x_mm','corner01_y_mm','corner01_z_mm',
+    'corner10_x_mm','corner10_y_mm','corner10_z_mm','corner11_x_mm','corner11_y_mm','corner11_z_mm'
+  ];
+  const numEdges = closed ? subN : subN-1;
+  const rows = panels.map((panel, idx)=>{
+    const { p00, p01, warpAbsM } = panel;
+    const widthM = Math.hypot(p01[0]-p00[0], p01[1]-p00[1], p01[2]-p00[2]);
+    const warpMM = warpAbsM*1000;
+    // Same thresholds warpColor() uses (0/25/50mm green/amber/red stops), so a row's severity label
+    // always matches the color the corresponding panel is actually drawn with on screen.
+    const severity = warpMM < 25 ? 'green' : warpMM < 50 ? 'amber' : 'red';
+    return [
+      idx+1, Math.floor(idx/numEdges), idx%numEdges,
+      round6(widthM*MM), round6(widthM*M_TO_FT),
+      round6(warpMM), round6(warpAbsM*M_TO_FT*12),
+      severity,
+      ...toRow(panel.p00), ...toRow(panel.p01), ...toRow(panel.p10), ...toRow(panel.p11)
+    ].join(',');
+  });
+  return { csv: [header.join(','), ...rows].join('\n'), panelCount: panels.length };
+}
+function exportPanelScheduleCSV(){
+  const result = buildPanelScheduleCSV();
+  if(!result){ toast('Nothing to export yet'); return; }
+  const blob = new Blob([result.csv], {type:'text/csv'});
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement('a');
+  const stamp = new Date().toISOString().slice(0,19).replace(/[:T]/g,'-');
+  a.href = url;
+  a.download = `SPIRA_${state.mode}_panelschedule_${stamp}.csv`;
+  document.body.appendChild(a);
+  a.click();
+  document.body.removeChild(a);
+  URL.revokeObjectURL(url);
+  toast(`Exported panel schedule — ${result.panelCount} panels`);
+}
+document.getElementById('exportPanelScheduleBtn').addEventListener('click', exportPanelScheduleCSV);
 
 // ---------- Dynamo import script download ----------
 // Bundles the companion Dynamo Python-node script (see loftProfileCount export above) directly

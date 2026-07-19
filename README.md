@@ -94,7 +94,10 @@ face into narrower bays, since warp scales roughly linearly with panel width for
 rate; a live readout shows the resulting real-world panel width for whatever N is chosen. A
 "Colorblind-safe palette" toggle switches the green/amber/red gradient to Viridis' purple/teal/
 yellow stops, which read correctly by brightness alone rather than relying on distinguishing red
-from green.
+from green. "Export panel schedule (.csv)" exports one row per panel currently being analyzed —
+width, warp, a severity label matching the on-screen color, and all 4 corner coordinates in the
+same Z-up convention the loft-profiles export uses — recomputed fresh from the current
+floors/subdivision, so it always matches what's on screen.
 
 Comparing Twist against Bend with this overlay on is a good demonstration: Bend's panels come out
 exactly flat at any angle, since it only sweeps the cross-section along an arc without ever
