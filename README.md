@@ -22,9 +22,13 @@ the taper amount is an illustrative estimate, like every case study's footprint 
 **Shear** — the first of two operations where the axis A doesn't stay fixed. Each slice is
 translated within its own plane, linear from (0,0) at the base to (Δx,Δy) at the top, so the axis's
 image A₁ leans away from the original A (shown as a dashed reference line alongside the solid A₁).
-Translation is an exact isometry, so shear preserves volume, same as twist. No case study — Capital
-Gate (Abu Dhabi) was investigated and removed: its floor plates don't just lean, they change shape
-and orientation with height, which Shear's straight-cross-section translation can't represent.
+Translation is an exact isometry, so shear preserves volume, same as twist. A case study loads the
+**Leaning Tower of Pisa** (~56m, 8 floors, ~3.97° lean); height, lean angle, floor count, and base
+diameter are sourced, and cross-check against each other (height×tan(lean) ≈ the independently
+sourced top offset). Capital Gate (Abu Dhabi) was investigated and removed in an earlier version:
+its floor plates don't just lean, they change shape and orientation with height, which Shear's
+straight-cross-section translation can't represent — Pisa's real deviation (a later corrective
+counter-angle) stays within the same operation, unlike Capital Gate's.
 
 **Bend** — the axis A maps to a circular arc A₁ of radius R = h/β, chosen so the arc length exactly
 equals the original axis length h. Each slice is rearranged into the plane normal to that arc, with

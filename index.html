@@ -4,6 +4,27 @@ Interactive explorer of architectural deformation operations — twisting, taper
 Joe.K · axisbim.io
 
 CHANGELOG
+v1.49.0 - 2026-07-19 - More case studies, per user request. Added the Leaning Tower of Pisa as
+         Shear's first case study since Capital Gate was removed in v1.41.0 — height (~56m), lean
+         angle (~3.97°), floor count (8), and base diameter (~15.5m) are all independently sourced,
+         and two of those figures cross-check against each other: height×tan(lean) computes to
+         ~3.89m, matching the ~3.9m horizontal top-offset multiple sources cite directly rather than
+         one number being derived from the other. Ellipse preset (the tower is cylindrical, not
+         faceted). Caveat disclosed: later floors were built at a slight corrective counter-angle
+         once the tilt was noticed mid-construction, so the real lean isn't one straight line the way
+         linear Shear is — a deviation within the same operation, the same single-parameter
+         simplification already accepted for The Shard's taper, not a different-operation mismatch.
+         Investigated and REJECTED two more candidates before either got this far: the Transamerica
+         Pyramid (Taper) has two asymmetric wing buttresses that appear partway up and don't taper
+         with the rest of the building, plus a separate 65m spire; Absolute World/"Marilyn Monroe"
+         (Twist) turned out to also taper inward then back out (a waist) despite its headline "twists
+         209°" stat, the same twist+taper compound that already sank Shanghai Tower. Bend remains the
+         only mode with no case study. Updated an existing v1.41.0 audit check that had asserted no
+         "Case study (real leaning building)" label could exist in Shear's sidebar markup — true when
+         written (right after Capital Gate's removal), but too strict now that Shear legitimately has
+         one again; replaced with a check that the label is tied to a real, currently-defined case
+         study rather than an orphan, preserving the original check's actual intent. Added 4 new
+         checks for Pisa itself. 99/99 audit passing.
 v1.48.0 - 2026-07-19 - Fixed Play doing nothing on Free (FFD), reported by user testing along with a
          correct diagnosis of why: unlike every other mode, Free has no single scalar deformation
          parameter to animate — 8 independently-draggable control points instead. startAnimation()'s
@@ -1460,6 +1481,17 @@ v1.0.0 - 2026-07-17 - Initial build. Twist operation on four cross-section prese
           <input type="range" id="shearDYSlider" min="-8" max="8" step="0.1" value="1">
         </div>
         <button class="btn secondary reset-btn" data-resetmode="shear" style="width:100%; margin-top:6px;">Reset values</button>
+        <div style="font-size:0.78rem; color:var(--muted); margin:14px 0 8px;">
+          Case study (real leaning building)
+        </div>
+        <button class="btn secondary" data-casestudy="pisa" style="width:100%; font-size:0.74rem;">Leaning Tower of Pisa</button>
+        <div style="font-size:0.68rem; line-height:1.4; margin-top:4px;" class="caveat">
+          Height, lean angle, floor count, and base diameter are sourced — the sourced ~3.9m
+          horizontal offset at the top even cross-checks against height×tan(lean) independently.
+          Real-building note: later floors were built at a corrective counter-angle to fight the
+          ongoing tilt, so the true lean isn't one straight line the way this linear Shear preset
+          is — a simplification, not a literal match, the same treatment as The Shard's taper.
+        </div>
       </div>
       <div id="bendParamsBlock" style="display:none;">
         <div class="slider-row">
@@ -1692,7 +1724,7 @@ v1.0.0 - 2026-07-17 - Initial build. Twist operation on four cross-section prese
 <script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
 <script src="https://cdn.jsdelivr.net/npm/three@0.128.0/examples/js/controls/OrbitControls.js"></script>
 <script>
-const APP_VERSION = '1.48.0';
+const APP_VERSION = '1.49.0';
 
 // ---------- toast ----------
 let toastTimer=null;
@@ -4312,8 +4344,8 @@ document.querySelectorAll('.reset-btn').forEach(btn=>{
 // RMJM's own case study), and the form itself is described as curved/organic throughout, not a
 // straight-edged cross-section translated along a straight lean the way Shear models it. That's the
 // same compound-deformation mismatch that got Shanghai Tower and The Bow rejected — the original
-// caveat (nonlinear lean rate) understated how far off the geometry actually is. Shear has no case
-// study for now, same as Bend.
+// caveat (nonlinear lean rate) understated how far off the geometry actually is. Shear had no case
+// study for a while after that (see v1.49.0 below for what replaced it).
 //
 // v1.47.0: searched specifically for a real single-axis Bend candidate (a tower that curves along
 // its vertical axis without also twisting or tapering) — came up empty. Real "curved" supertalls
@@ -4322,6 +4354,13 @@ document.querySelectorAll('.reset-btn').forEach(btn=>{
 // honest single-operation match. Left without a case study rather than force a compound building in
 // with an understated caveat, the exact mistake Capital Gate was. Helix, previously also empty, now
 // has one: the Guggenheim Museum NYC's spiral ramp (see its entry below).
+//
+// v1.49.0: Shear now has a case study — the Leaning Tower of Pisa (see its entry below), whose
+// sourced figures independently cross-check (height×tan(lean) ≈ the separately-sourced top offset).
+// Also investigated and rejected two more this round before either got this far: the Transamerica
+// Pyramid (Taper — asymmetric wing buttresses partway up plus a separate spire) and Absolute
+// World/"Marilyn Monroe" (Twist — also tapers inward then back out, a waist, not twist-only). Bend
+// remains the only mode with no case study.
 const CASE_STUDIES = {
   turningtorso: {
     mode: 'twist', label: 'Turning Torso',
@@ -4348,6 +4387,29 @@ const CASE_STUDIES = {
     // still an estimate, not a sourced ratio.
     fields: { preset:'square', taperV:0.4, taperW:0.4, floors:95, floorHeightM:309.6/95, footprintWidthM:28, footprintDepthM:28 },
     toast: 'The Shard — 309.6m, 95 floors, tapers to a near-point (Piano, London, 2012)'
+  },
+  pisa: {
+    mode: 'shear', label: 'Leaning Tower of Pisa',
+    // Shear's first case study — Capital Gate was removed here in v1.41.0 for exactly the kind of
+    // compound mismatch this bar exists to catch. Investigated two other candidates for OTHER modes
+    // this same round and rejected both before they got anywhere near this file: the Transamerica
+    // Pyramid (Taper) has two asymmetric "wing" buttresses that appear partway up and don't taper
+    // with the rest of the building, plus a separate 65m spire — a single linear taper can't
+    // honestly represent that. Absolute World/"Marilyn Monroe" (Twist) turned out to also taper
+    // inward then back out ("much narrower in the middle, in the waist") — the same twist+taper
+    // compound that got Shanghai Tower rejected, just not obvious from the headline "twists 209°"
+    // stat alone.
+    //
+    // Pisa is different: height (~56m), lean angle (~3.97°), floor count (8), and base diameter
+    // (~15.5m) are all independently sourced, and they cross-check — height×tan(lean) computes to
+    // ~3.89m, matching the ~3.9m horizontal top offset multiple sources cite directly, rather than
+    // one figure being derived from the other. Real-building caveat: the lean isn't one straight
+    // line from base to top the way linear Shear is — later floors were built at a slight corrective
+    // counter-angle once the tilt was noticed during construction — but that's a deviation in the
+    // SAME operation (translation along an axis), not a different one, the same single-parameter
+    // simplification already accepted for The Shard's taper.
+    fields: { preset:'ellipse', shearDXM: 56*Math.tan(3.97*Math.PI/180), shearDYM:0, floors:8, floorHeightM:56/8, footprintWidthM:15.5, footprintDepthM:15.5 },
+    toast: 'Leaning Tower of Pisa — 56m, 8 floors, 3.97° lean (Pisa, Italy, 1372)'
   },
   guggenheim: {
     mode: 'helix', label: 'Guggenheim NYC',

@@ -253,8 +253,12 @@ check('shareable-URL parsing runs before the slider/DOM sync block that reads fr
 sectionHeader('v1.41.0 — Capital Gate case study removed');
 check('capitalgate is not a key in CASE_STUDIES', !/capitalgate:\s*\{/.test(src));
 check('no "Capital Gate" case-study button remains in the sidebar markup', !/data-casestudy="capitalgate"/.test(src));
-check('Shear\'s case-study UI block was removed along with it, not just the button (no orphaned "Case study (real leaning building)" label)',
-  !/Case study \(real leaning building\)/.test(src));
+check('if a "Case study (real leaning building)" label exists in the sidebar, it belongs to a real, currently-defined case study (not an orphaned label left over from a removed one, the original mistake this check was written to catch)',
+  (function(){
+    if(!/Case study \(real leaning building\)/.test(src)) return true; // fine if there's no such label at all
+    const m = src.match(/Case study \(real leaning building\)\s*<\/div>\s*<button class="btn secondary" data-casestudy="([^"]+)"/);
+    return !!m && new RegExp(m[1] + ": \\{").test(src);
+  })());
 
 /* ===================== v1.42.0 — Reset values also restores footprint ===================== */
 // Root cause of the reported Bend "fan" bug: Reset never touched footprintWidthM/footprintDepthM,
@@ -438,6 +442,26 @@ check('startAnimation()\'s FFD branch checks for at least one control point with
   (function(){
     const m = src.match(/function startAnimation\(\)\{[\s\S]*?\n\}/);
     return !!m && m[0].includes('hasOffset') && m[0].includes("toast('Drag a corner handle first") && m[0].includes('return;');
+  })());
+
+/* ===================== v1.49.0 — Leaning Tower of Pisa case study ===================== */
+sectionHeader('v1.49.0 — Leaning Tower of Pisa case study');
+check('pisa exists in CASE_STUDIES with mode "shear" and the ellipse cross-section preset (the real tower is cylindrical, not square/faceted)',
+  (function(){
+    const m = src.match(/pisa: \{[\s\S]*?\n  \}/);
+    return !!m && m[0].includes("mode: 'shear'") && m[0].includes("preset:'ellipse'");
+  })());
+check('Pisa\'s shearDXM is computed from height*tan(lean), not a separately-typed constant that could silently drift out of sync with the sourced height/angle it\'s supposed to derive from',
+  /shearDXM: 56\*Math\.tan\(3\.97\*Math\.PI\/180\)/.test(src));
+check('Pisa\'s computed horizontal top offset (height×tan(lean)) independently cross-checks against the separately-sourced ~3.9m figure within 5cm — the two numbers come from different published facts, not one being derived from the other and trivially matching',
+  (function(){
+    const computed = 56*Math.tan(3.97*Math.PI/180);
+    return Math.abs(computed - 3.9) < 0.05;
+  })());
+check('Pisa\'s shearDXM fits within the shearDXSlider\'s existing -8..8 range (no slider widening needed for this one, unlike Guggenheim\'s Helix radii in v1.47.0)',
+  (function(){
+    const computed = 56*Math.tan(3.97*Math.PI/180);
+    return computed > -8 && computed < 8;
   })());
 
 /* ===================== Summary ===================== */
