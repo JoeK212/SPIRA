@@ -4,6 +4,58 @@ Interactive explorer of architectural deformation operations — twisting, taper
 Joe.K · axisbim.io
 
 CHANGELOG
+v1.44.0 - 2026-07-19 - Sidebar overhaul, per user feedback: "the right side panel is getting clunky
+         un organized... simple and advanced mode - each mode needs to be consistent... also this
+         panel should be stretchable." Two independent changes:
+         (1) Simple/Advanced view toggle (new "View" section, top of sidebar). Simple hides four
+         sections consistently, regardless of which Operation is selected: Units, Projection,
+         resolution (slices), Overlays (including the whole panel-warp toolchain), and Export.
+         Operation/Cross-section/Deformation-parameters/Reference stay visible in both modes — "the
+         shape itself" vs. tooling around it. Deliberately kept OUT of the model `state` object (and
+         so out of localStorage's model key, Reset Values, and the v1.40.0 shareable-URL encoding) —
+         this is a screen/workflow preference, not part of "the building" a share link is supposed to
+         hand someone; persisted under its own 'spira-ui-prefs' localStorage key instead. Defaults to
+         Simple on first load.
+         (2) Resizable sidebar — a 6px drag handle between viewport and sidebar, Pointer Events (not
+         mouse-only, so touch/pen work too) with setPointerCapture so a fast drag off the thin handle
+         doesn't drop the gesture. Width lives in a --sidebar-width CSS custom property (the existing
+         aside{width:...} rule just reads it, no other CSS touched), clamped to 260–min(640,60vw), and
+         calls the existing resize() every pointermove so the 3D viewport visually keeps pace with the
+         drag rather than only updating once released. Also persisted in 'spira-ui-prefs', separate
+         from model state for the same reason as (1). Hidden entirely on the existing mobile
+         breakpoint, where the sidebar already stacks full-width below the viewport and a width drag
+         wouldn't mean anything. Added 6 new audit_deploy.js checks (66/66 passing).
+v1.43.0 - 2026-07-19 - Fixed a one-directional overlay-switch sync bug, prompted by a user question
+         about whether blue reliably means "on" throughout the app. The color rule itself was
+         already fully consistent (all nine overlay switches share one CSS class and one click
+         handler, prussian blue #1f4e79 = on, tan = off) — but page-load init only ever ADDED the
+         'on' class (`if(state.overlays[key]) sw.classList.add('on')`), never removed it. Five of the
+         nine switches (Axis A, Base plane B, Ruling lines, Slice rings, Floor lines) default to true
+         and have class="switch on" hardcoded in the static markup; a saved session or shared link
+         (v1.40.0) where one of THOSE FIVE happened to be false would load with the switch showing
+         blue/on while the overlay was actually off — a genuine visual/state mismatch, not just a
+         one-off. Fixed by switching init to `sw.classList.toggle('on', !!state.overlays[key])`,
+         which forces the class to match the boolean exactly regardless of which way the markup and
+         the loaded state disagree. Verified with a minimal classList simulation covering all four
+         markup/state combinations (including the two that already worked, to confirm no regression)
+         before shipping. Added 1 audit_deploy.js check (60/60 passing).
+v1.42.0 - 2026-07-19 - Fixed "Reset values" leaving footprint width/depth untouched, reported with a
+         screenshot of Bend's Reset producing a self-overlapping fan/pac-man shape instead of a
+         tower. Root cause, confirmed by the math in computeLayerPoint's bend case (worldY =
+         (R − p[1])·sinθ): a footprint left over from a prior mode or case study can have a
+         half-extent larger than the bend radius R = h/β, which flips (R − p[1]) negative and folds
+         the swept solid back through its own axis — the profile itself, not just the deformation
+         parameter, has to be back at a sane scale for the reset shape to make sense. At the true
+         fresh-load defaults (2×2m footprint, half-extent 1m vs R≈8.91m at β=180°, 28m tall) this
+         never happened, which is why it looked like only Bend's specific default was broken; the
+         real gap was that Reset never restored footprint at all, so *any* mode's Reset could inherit
+         a wildly mismatched scale from whatever was last loaded. Added footprintWidthM/footprintDepthM
+         to MODE_DEFAULTS for twist/taper/shear/bend (helix and ffd don't use footprint) and added
+         syncFootprintSliderRange() to resetModeValues() so the sidebar sliders actually reflect the
+         restored value, not just internal state. Verified numerically: reproduced the exact reported
+         scenario (stale 75.5ft footprint, 8 floors × 3.5m, β=180°) and confirmed it inverts
+         (half-extent 11.51m > R 8.91m), then confirmed the fixed default (half-extent 1m, ratio
+         ≈0.11) does not. Added 4 new audit_deploy.js checks (59/59 passing).
 v1.41.0 - 2026-07-19 - Removed Capital Gate as Shear's case study, per user feedback: "the two best
          case study's samples are: turning torso and cayan tower. capital is not even close to what
          the actual projects is in real life." Checked further rather than taking the caveat already
@@ -935,8 +987,20 @@ v1.0.0 - 2026-07-17 - Initial build. Twist operation on four cross-section prese
     width:150px; margin-top:3px; font-family:'Space Mono', monospace; font-size:0.68rem;
   }
 
+  #sidebarResizeHandle{
+    width:6px; flex-shrink:0; cursor:col-resize; background:transparent;
+    position:relative; touch-action:none;
+  }
+  #sidebarResizeHandle::after{
+    content:''; position:absolute; top:0; bottom:0; left:2px; width:2px;
+    background:var(--line);
+  }
+  #sidebarResizeHandle:hover::after, #sidebarResizeHandle.dragging::after{
+    background:var(--prussian);
+  }
+
   aside{
-    width:300px; flex-shrink:0;
+    width:var(--sidebar-width, 300px); flex-shrink:0;
     background:var(--paper);
     border-left:1px solid var(--line);
     overflow-y:auto;
@@ -1077,6 +1141,7 @@ v1.0.0 - 2026-07-17 - Initial build. Twist operation on four cross-section prese
   @media (max-width: 760px){
     main{flex-direction:column;}
     aside{width:100%; border-left:none; border-top:1px solid var(--line); max-height:46vh;}
+    #sidebarResizeHandle{display:none;} /* dragging a width makes no sense once aside stacks full-width below the viewport */
     #hud{font-size:0.72rem; max-width:220px;}
     #viewControls button{padding:6px 9px; font-size:0.68rem;}
     /* v1.32.0: #warpLegend was added (v1.26.0) after this breakpoint existed and never got scaled
@@ -1128,7 +1193,17 @@ v1.0.0 - 2026-07-17 - Initial build. Twist operation on four cross-section prese
     </div>
   </div>
 
+  <div id="sidebarResizeHandle" title="Drag to resize"></div>
+
   <aside>
+    <section class="group">
+      <h3>View</h3>
+      <div class="presets" id="uiModeGrid">
+        <button class="preset-btn" data-uimode="simple">Simple</button>
+        <button class="preset-btn" data-uimode="advanced">Advanced</button>
+      </div>
+    </section>
+
     <section class="group">
       <h3>Operation</h3>
       <div class="presets" id="modeGrid" style="grid-template-columns:1fr 1fr 1fr;">
@@ -1154,7 +1229,7 @@ v1.0.0 - 2026-07-17 - Initial build. Twist operation on four cross-section prese
       </div>
     </section>
 
-    <section class="group">
+    <section class="group" id="unitsSection">
       <h3>Units</h3>
       <div class="presets" id="unitsGrid">
         <button class="preset-btn active" data-units="metric">Metric (m)</button>
@@ -1162,7 +1237,7 @@ v1.0.0 - 2026-07-17 - Initial build. Twist operation on four cross-section prese
       </div>
     </section>
 
-    <section class="group">
+    <section class="group" id="projectionSection">
       <h3>Projection</h3>
       <div class="presets" id="projectionGrid">
         <button class="preset-btn active" data-projection="perspective">Perspective</button>
@@ -1286,13 +1361,13 @@ v1.0.0 - 2026-07-17 - Initial build. Twist operation on four cross-section prese
           <div style="font-size:0.72rem; color:var(--muted); margin-top:2px;" id="helixTotalRiseNote"></div>
         </div>
       </div>
-      <div class="slider-row">
+      <div id="resolutionBlock" class="slider-row">
         <div class="top"><span>resolution (slices)</span><span class="val" id="resVal">48</span></div>
         <input type="range" id="resSlider" min="6" max="120" step="1" value="48">
       </div>
     </section>
 
-    <section class="group">
+    <section class="group" id="overlaysSection">
       <h3>Overlays</h3>
       <div class="toggle-row">
         <span>Axis A</span>
@@ -1348,7 +1423,7 @@ v1.0.0 - 2026-07-17 - Initial build. Twist operation on four cross-section prese
       <button class="btn secondary" id="exportPanelScheduleBtn" style="width:100%; margin-top:8px; display:none;">Export panel schedule (.csv)</button>
     </section>
 
-    <section class="group">
+    <section class="group" id="exportSection">
       <h3>Export</h3>
       <button class="btn secondary" id="exportViewPngBtn" style="width:100%;">Export view (.png)</button>
       <div style="font-size:0.72rem; line-height:1.5; color:var(--muted); margin-top:6px; margin-bottom:10px; padding-bottom:10px; border-bottom:1px solid var(--line);">
@@ -1410,7 +1485,7 @@ v1.0.0 - 2026-07-17 - Initial build. Twist operation on four cross-section prese
 <script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
 <script src="https://cdn.jsdelivr.net/npm/three@0.128.0/examples/js/controls/OrbitControls.js"></script>
 <script>
-const APP_VERSION = '1.41.0';
+const APP_VERSION = '1.44.0';
 
 // ---------- toast ----------
 let toastTimer=null;
@@ -1453,6 +1528,14 @@ function confirmDialog(message, confirmLabel = 'Confirm'){
 // sidebar's Reference panel, which explains the underlying math and cites the book figures it's
 // drawn from; this is just "what does this button do."
 const HELP_HTML = `
+  <h4>Simple / Advanced view &amp; resizing</h4>
+  <p>The View toggle at the top of the sidebar switches between Simple (just the shape: Operation,
+  Cross-section, Deformation parameters, Reference) and Advanced (adds Units, Projection, resolution,
+  Overlays, and Export) — the same four sections hide or show no matter which Operation is selected.
+  Drag the thin handle at the sidebar's left edge to resize it; both this choice and the width are
+  remembered for next time, separately from the model itself, so they're not included if you use
+  "Copy share link."</p>
+
   <h4>Operations</h4>
   <p>The six buttons at the top of the sidebar switch which deformation is applied to the
   cross-section: Twist, Taper, Shear, Bend, Free (freeform/FFD), and Helix. Each has its own
@@ -3509,6 +3592,99 @@ const projectionGrid = document.getElementById('projectionGrid');
   });
 });
 
+// ---------- UI preferences: Simple/Advanced mode + resizable sidebar (v1.44.0) ----------
+// Deliberately kept OUT of the `state` object (and so out of localStorage's 'spira-state' key,
+// Reset Values, and the shareable-URL encoding) — these are this browser's own screen/workflow
+// preferences, not part of "the model configuration" the way mode/preset/deformation params are.
+// A share link is supposed to hand someone else your BUILDING, not force your sidebar width or
+// Simple/Advanced choice onto their screen. Persisted separately under its own localStorage key.
+const uiPrefs = { uiMode: 'simple', sidebarWidthPx: 300 };
+try{
+  const savedUI = JSON.parse(localStorage.getItem('spira-ui-prefs') || 'null');
+  if(savedUI){
+    if(savedUI.uiMode === 'simple' || savedUI.uiMode === 'advanced') uiPrefs.uiMode = savedUI.uiMode;
+    if(Number.isFinite(savedUI.sidebarWidthPx)) uiPrefs.sidebarWidthPx = savedUI.sidebarWidthPx;
+  }
+}catch(e){}
+function persistUIPrefs(){
+  localStorage.setItem('spira-ui-prefs', JSON.stringify(uiPrefs));
+}
+
+// Sections that only ever add clutter for someone just exploring a shape: unit/projection choice,
+// render-resolution tuning, every overlay (including the whole panel-warp toolchain), and every
+// export path. Simple mode hides exactly these four, consistently, regardless of which Operation is
+// selected — Operation/Cross-section/Deformation-parameters/Reference stay visible in both modes,
+// since those are "the shape itself," not tooling around it.
+const ADVANCED_ONLY_IDS = ['unitsSection', 'projectionSection', 'resolutionBlock', 'overlaysSection', 'exportSection'];
+function applyUIMode(mode){
+  uiPrefs.uiMode = mode;
+  const showAdvanced = mode === 'advanced';
+  ADVANCED_ONLY_IDS.forEach(id=>{
+    const el = document.getElementById(id);
+    if(el) el.style.display = showAdvanced ? '' : 'none';
+  });
+  [...uiModeGrid.children].forEach(b=>b.classList.toggle('active', b.dataset.uimode === mode));
+  persistUIPrefs();
+}
+const uiModeGrid = document.getElementById('uiModeGrid');
+[...uiModeGrid.children].forEach(btn=>{
+  btn.addEventListener('click', ()=>{
+    if(btn.dataset.uimode === uiPrefs.uiMode) return;
+    applyUIMode(btn.dataset.uimode);
+    toast(uiPrefs.uiMode === 'advanced' ? 'Advanced view' : 'Simple view');
+  });
+});
+applyUIMode(uiPrefs.uiMode);
+
+// ---------- resizable sidebar (v1.44.0) ----------
+// Drag #sidebarResizeHandle to resize <aside> via a CSS variable rather than fighting flexbox's own
+// width math directly — one property to read/write, and the existing `width:var(--sidebar-width,
+// 300px)` rule (set on <aside> itself) picks it up with no other CSS changes needed. Pointer Events
+// (not mousedown/mousemove) so the same code handles touch/pen without a separate touch listener
+// path, and setPointerCapture keeps receiving move events even if the pointer leaves the thin
+// 6px handle mid-drag, which mouse events alone would lose.
+(function setupSidebarResize(){
+  const handle = document.getElementById('sidebarResizeHandle');
+  const asideEl = document.querySelector('aside');
+  function clampWidth(px){
+    const maxW = Math.min(640, window.innerWidth * 0.6);
+    return Math.max(260, Math.min(maxW, px));
+  }
+  function applyWidth(px){
+    document.documentElement.style.setProperty('--sidebar-width', px + 'px');
+  }
+  applyWidth(clampWidth(uiPrefs.sidebarWidthPx));
+
+  let dragging = false, startX = 0, startWidth = 0;
+  handle.addEventListener('pointerdown', (e)=>{
+    dragging = true;
+    startX = e.clientX;
+    startWidth = asideEl.getBoundingClientRect().width;
+    handle.classList.add('dragging');
+    handle.setPointerCapture(e.pointerId);
+    e.preventDefault();
+  });
+  handle.addEventListener('pointermove', (e)=>{
+    if(!dragging) return;
+    // aside sits to the right of the handle, so dragging left (negative dx) should grow it.
+    const dx = e.clientX - startX;
+    applyWidth(clampWidth(startWidth - dx));
+    resize(); // cheap (aspect + renderer.setSize) — live-updates the 3D viewport while dragging
+  });
+  function endDrag(e){
+    if(!dragging) return;
+    dragging = false;
+    handle.classList.remove('dragging');
+    uiPrefs.sidebarWidthPx = clampWidth(asideEl.getBoundingClientRect().width);
+    persistUIPrefs();
+  }
+  handle.addEventListener('pointerup', endDrag);
+  handle.addEventListener('pointercancel', endDrag);
+  // If the window itself shrinks below the current sidebar width (e.g. resizing a browser window
+  // narrower), re-clamp so the sidebar can't leave the viewport unusably wide.
+  window.addEventListener('resize', ()=>{ applyWidth(clampWidth(uiPrefs.sidebarWidthPx)); });
+})();
+
 function syncFloorHeightSliderRange(){
   if(state.units === 'metric'){
     floorHeightSlider.min = 2.5; floorHeightSlider.max = 6; floorHeightSlider.step = 0.1;
@@ -3744,7 +3920,14 @@ document.getElementById('solveToleranceBtn').addEventListener('click', solveTole
 
 document.querySelectorAll('.switch').forEach(sw=>{
   const key = sw.dataset.toggle;
-  if(state.overlays[key]) sw.classList.add('on');
+  // v1.43.0: was `if(state.overlays[key]) sw.classList.add('on')` — only ever ADDED the 'on' class,
+  // never removed it. Five of these nine switches (axis/plane/rulings/slicerings/floorlines) default
+  // to true and have class="switch on" hardcoded in the static markup, so a saved session or shared
+  // link where one of THOSE FIVE is false left the switch looking on (blue) while functionally off —
+  // a real visual/state mismatch, not just a one-off. classList.toggle's second argument forces the
+  // class to match a boolean exactly in either direction, so this now works whichever way state
+  // differs from markup, for all nine switches uniformly.
+  sw.classList.toggle('on', !!state.overlays[key]);
   sw.addEventListener('click', ()=>{
     state.overlays[key] = !state.overlays[key];
     sw.classList.toggle('on');
@@ -3776,16 +3959,33 @@ syncPanelwarpDependentUI();
 // Per-mode defaults, matching the state object's own initial values exactly — kept as a separate
 // constant (rather than re-reading from `state` itself, which would just return whatever's been
 // changed) so "reset" always means "back to what this mode looked like on first load," not "back to
-// whatever it was a moment ago." twist/taper/shear/bend also reset the shared floors/floor-height,
-// since those are what "this operation's values" visibly means to someone looking at the sidebar;
-// Helix's own turns/pitch serve the same role for it, so its floors/floor-height aren't touched (it
-// doesn't use them). ffd is handled separately below since its "value" is the 8-point offset array,
-// not a flat set of fields.
+// whatever it was a moment ago." twist/taper/shear/bend also reset the shared floors/floor-height
+// AND footprint width/depth, since those are what "this operation's values" visibly means to someone
+// looking at the sidebar; Helix's own turns/pitch/radii serve the same role for it, so its floors/
+// floor-height/footprint aren't touched (it doesn't use them). ffd is handled separately below since
+// its "value" is the 8-point offset array, not a flat set of fields.
+//
+// v1.42.0: footprintWidthM/footprintDepthM were NOT in this list before, even though they're exactly
+// as much "this mode's values" as floors/floor-height already were. Real bug this caused, reported
+// with a screenshot: load a case study (or just hand-edit footprint) with a large footprint, switch
+// to Bend, click Reset — Bend's own values (β_max, floors, floor-height) reset fine, but the stale
+// large footprint survives untouched, and combined with Bend's β_max=180° default produces a
+// self-overlapping fan/pac-man shape instead of a tower. Root cause, confirmed by the math in
+// computeLayerPoint's bend case: worldY = (R − p[1]) · sinθ, where p[1] is the profile's own
+// half-depth extent and R = h/β is the bend radius — the moment the footprint's half-extent exceeds
+// R, (R − p[1]) goes negative and the profile inverts through the bend axis, folding the swept solid
+// back on itself. At the true fresh-load defaults (footprint 2×2m, h=28m, β=180° → R=h/π≈8.91m),
+// the profile's half-extent (1m) sits comfortably under R (ratio ≈0.11), so the shape was always
+// fine at first load — the fan only appeared once footprint drifted away from that default and
+// Reset had no way to know to put it back. Every mode's Reset now restores footprint alongside its
+// own deformation parameters, closing that gap for all four (not just Bend, since Taper/Shear can
+// look equally wrong at the wrong footprint scale even if they don't have Bend's hard inversion
+// failure mode).
 const MODE_DEFAULTS = {
-  twist: { alphaMax: 120, floors: 8, floorHeightM: 3.5 },
-  taper: { taperV: 0.5, taperW: 0.5, floors: 8, floorHeightM: 3.5 },
-  shear: { shearDXM: 3.0, shearDYM: 1.0, floors: 8, floorHeightM: 3.5 },
-  bend: { bendBetaMax: 180, floors: 8, floorHeightM: 3.5 },
+  twist: { alphaMax: 120, floors: 8, floorHeightM: 3.5, footprintWidthM: 2.0, footprintDepthM: 2.0 },
+  taper: { taperV: 0.5, taperW: 0.5, floors: 8, floorHeightM: 3.5, footprintWidthM: 2.0, footprintDepthM: 2.0 },
+  shear: { shearDXM: 3.0, shearDYM: 1.0, floors: 8, floorHeightM: 3.5, footprintWidthM: 2.0, footprintDepthM: 2.0 },
+  bend: { bendBetaMax: 180, floors: 8, floorHeightM: 3.5, footprintWidthM: 2.0, footprintDepthM: 2.0 },
   helix: { helixGenerator: 'line', helixTurns: 3, helixPitchM: 3.0, helixRInnerM: 0.3, helixROuterM: 2.2, helixTubeRM: 0.25, helixTubeOffsetM: 1.5 },
 };
 function resetModeValues(mode){
@@ -3804,6 +4004,7 @@ function resetModeValues(mode){
   floorsSlider.value = state.floors;
   helixTurnsSlider.value = state.helixTurns;
   syncFloorHeightSliderRange();
+  syncFootprintSliderRange();
   syncShearSliderRange();
   syncHelixSliderRanges();
   applyModeChrome(); // in case helixGenerator changed, so the Line/Circle sub-toggle display follows

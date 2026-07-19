@@ -256,6 +256,78 @@ check('no "Capital Gate" case-study button remains in the sidebar markup', !/dat
 check('Shear\'s case-study UI block was removed along with it, not just the button (no orphaned "Case study (real leaning building)" label)',
   !/Case study \(real leaning building\)/.test(src));
 
+/* ===================== v1.42.0 — Reset values also restores footprint ===================== */
+// Root cause of the reported Bend "fan" bug: Reset never touched footprintWidthM/footprintDepthM,
+// so a footprint left over from a prior mode/case-study could exceed the bend radius R = h/β and
+// invert the swept solid (worldY = (R - p[1])*sinTheta flips negative once p[1] > R).
+sectionHeader('v1.42.0 — Reset values also restores footprint');
+check('MODE_DEFAULTS.twist/taper/shear/bend each include footprintWidthM and footprintDepthM (not just the deformation-specific fields)',
+  (function(){
+    const m = src.match(/const MODE_DEFAULTS = \{[\s\S]*?\n\};/);
+    if(!m) return false;
+    const body = m[0];
+    return ['twist:', 'taper:', 'shear:', 'bend:'].every(key=>{
+      const lineMatch = body.match(new RegExp(key + '[^\\n]*'));
+      return !!lineMatch && /footprintWidthM/.test(lineMatch[0]) && /footprintDepthM/.test(lineMatch[0]);
+    });
+  })());
+check('resetModeValues() calls syncFootprintSliderRange() (so the sidebar sliders actually reflect the restored footprint, not just internal state)',
+  (function(){
+    const m = src.match(/function resetModeValues\(mode\)\{[\s\S]*?\n\}/);
+    return !!m && m[0].includes('syncFootprintSliderRange()');
+  })());
+check('bend inversion math: fresh-default footprint half-extent (1m) stays well under the fresh-default bend radius R (~8.91m at beta=180, h=28m)',
+  (function(){
+    const h = 8 * 3.5, betaRad = 180 * Math.PI/180, R = h/betaRad;
+    return (2.0/2) < R * 0.5; // comfortable margin, not just barely under
+  })());
+check('bend inversion math: the OLD reported bug scenario (stale ~11.5m footprint half-extent) DOES exceed R, confirming this is the real root cause and not a coincidence',
+  (function(){
+    const h = 8 * 3.5, betaRad = 180 * Math.PI/180, R = h/betaRad;
+    const staleHalfExtentM = (75.5/2) * 0.3048;
+    return staleHalfExtentM > R;
+  })());
+
+/* ===================== v1.43.0 — overlay switch init is bidirectional ===================== */
+// Page-load switch sync used to only ever ADD the 'on' class, never remove it — a real bug for the
+// five switches (axis/plane/rulings/slicerings/floorlines) whose markup hardcodes class="switch on"
+// by default: a saved session or shared link with one of those set to false loaded showing blue/on
+// while actually off.
+sectionHeader('v1.43.0 — overlay switch init is bidirectional');
+check('switch init uses classList.toggle(\'on\', !!state.overlays[key]) (bidirectional — can both add AND remove the on class to match state), not a one-way if/add',
+  /sw\.classList\.toggle\('on', !!state\.overlays\[key\]\);/.test(src));
+
+/* ===================== v1.44.0 — Simple/Advanced view + resizable sidebar ===================== */
+sectionHeader('v1.44.0 — Simple/Advanced view + resizable sidebar');
+check('uiPrefs (Simple/Advanced + sidebar width) is a separate object from `state`, not merged into it — must stay out of localStorage\'s model key, Reset Values, and the shareable-URL encoding',
+  (function(){
+    const m = src.match(/const uiPrefs = \{[\s\S]*?\};/);
+    return !!m && !/state\.uiPrefs|state\.uiMode|state\.sidebarWidthPx/.test(src);
+  })());
+check('uiPrefs persists under its own \'spira-ui-prefs\' localStorage key (not the model\'s \'spira-state\' key)',
+  /localStorage\.setItem\('spira-ui-prefs'/.test(src) && /localStorage\.getItem\('spira-ui-prefs'/.test(src));
+check('applyUIMode() toggles the same four advanced-only sections consistently (Units, Projection, resolution, Overlays, Export) regardless of which Operation is active — not per-mode logic',
+  (function(){
+    const m = src.match(/const ADVANCED_ONLY_IDS = \[[^\]]*\];/);
+    if(!m) return false;
+    return ['unitsSection','projectionSection','resolutionBlock','overlaysSection','exportSection'].every(id=>m[0].includes(id));
+  })());
+check('Operation/Cross-section/Deformation-parameters/Reference sections are NOT in the advanced-only list (stay visible in Simple mode)',
+  (function(){
+    const m = src.match(/const ADVANCED_ONLY_IDS = \[[^\]]*\];/);
+    return !!m && !/crossSectionSection|referenceText/.test(m[0]);
+  })());
+check('sidebar resize handle uses Pointer Events with setPointerCapture (not mouse-only events, so touch/pen work and a fast drag off the thin 6px handle does not drop the gesture)',
+  (function(){
+    const m = src.match(/\(function setupSidebarResize\(\)\{[\s\S]*?\n\}\)\(\);/);
+    return !!m && m[0].includes('pointerdown') && m[0].includes('pointermove') && m[0].includes('setPointerCapture');
+  })());
+check('sidebar width is clamped (min 260px, max the lesser of 640px or 60vw) rather than allowed to grow unbounded or collapse to nothing',
+  (function(){
+    const m = src.match(/function clampWidth\(px\)\{[\s\S]*?\n  \}/);
+    return !!m && m[0].includes('260') && m[0].includes('640') && m[0].includes('window.innerWidth * 0.6');
+  })());
+
 /* ===================== Summary ===================== */
 console.log(`\n${BOLD}${'-'.repeat(40)}${RESET}`);
 console.log(`${GREEN}${pass} passed${RESET}, ${fail ? RED : DIM}${fail} failed${RESET}`);
