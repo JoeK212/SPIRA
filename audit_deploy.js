@@ -164,6 +164,52 @@ check('buildPanelScheduleCSV() reuses computePanelWarp()/subdivideProfileForPane
 check('panel schedule severity thresholds (25/50mm) match warpColor()\'s own gradient stops',
   /warpMM < 25 \? 'green' : warpMM < 50/.test(src));
 
+/* ===================== v1.37.0 — tolerance solver ===================== */
+// "Solve for minimum panels" sweeps N=1..12 through the same subdivideProfileForPanels()/
+// computePanelWarp() calls the live overlay uses, rather than assuming the roughly-linear
+// warp-vs-width relationship that motivated the feature — that relationship is only approximate
+// for non-axis-aligned edges, so each N must be verified directly, not extrapolated.
+sectionHeader('v1.37.0 — tolerance solver');
+check('solveTolerance() reuses computePanelWarp()/subdivideProfileForPanels() rather than extrapolating from a single N',
+  (function(){
+    const m = src.match(/function solveTolerance\(\)\{[\s\S]*?\n\}/);
+    return !!m && m[0].includes('computePanelWarp(') && m[0].includes('subdivideProfileForPanels(') && m[0].includes('for(let N=1; N<=12; N++)');
+  })());
+check('tolerance solver is button-triggered, not swept on every rebuild() (would repeat up to 12 panel-warp computations on every slider tick during a live drag)',
+  /document\.getElementById\('solveToleranceBtn'\)\.addEventListener\('click', solveTolerance\)/.test(src));
+
+/* ===================== v1.38.0 — Perspective/Orthographic projection ===================== */
+// Two camera objects share one positionCameraForFit() rather than trying to convert a perspective
+// distance into an equivalent orthographic zoom (not the same concept — an orthographic camera's
+// apparent size comes from its frustum, not its distance from the subject). resize() must update
+// BOTH cameras' projections every time, not just the active one, or switching mid-session hits a
+// stale frustum sized for whatever window dimension was current the last time that camera was active.
+sectionHeader('v1.38.0 — Perspective/Orthographic projection');
+check('both perspCamera and orthoCamera exist as real THREE camera objects', /const perspCamera = new THREE\.PerspectiveCamera/.test(src) && /const orthoCamera = new THREE\.OrthographicCamera/.test(src));
+check('positionCameraForFit() branches on camera.isPerspectiveCamera rather than assuming one camera type', /function positionCameraForFit\(/.test(src) && /if\(camera\.isPerspectiveCamera\)/.test(src));
+check('orthographic branch resets zoom to 1 on every fit (stale zoom from a prior manual scroll would otherwise carry over)', /camera\.zoom = 1;/.test(src));
+(function(){
+  const resizeBody = (src.match(/function resize\(\)\{[\s\S]*?\n\}/) || [''])[0];
+  check('resize() updates BOTH cameras\' projections regardless of which is active (not just the currently-active one)',
+    resizeBody.includes('perspCamera.aspect') && resizeBody.includes('applyOrthoFrustum()') && resizeBody.includes('orthoCamera.updateProjectionMatrix()'));
+})();
+check('switchProjection() re-fits fresh rather than converting the old camera\'s distance into an equivalent zoom/frustum (not an exact conversion between the two projection types)',
+  (function(){
+    const m = src.match(/function switchProjection\(newProjection\)\{[\s\S]*?\n\}/);
+    return !!m && m[0].includes('positionCameraForFit(') && m[0].includes('getWorldDirection');
+  })());
+check('switchProjection() disposes and recreates OrbitControls rather than mutating .object on the existing instance (not reliably supported across versions)',
+  /controls\.dispose\(\);\s*\n\s*controls = new THREE\.OrbitControls\(camera, renderer\.domElement\);/.test(src));
+
+/* ===================== v1.39.0 — PNG view export ===================== */
+// canvas.toBlob() in a continuously-rendering WebGL app needs preserveDrawingBuffer:true or it can
+// silently return a blank image, since the drawing buffer clears after compositing by default.
+sectionHeader('v1.39.0 — PNG view export');
+check('renderer has preserveDrawingBuffer:true (required for canvas.toBlob() to reliably capture a continuously-rendering scene, not just the frame that happened to still be in the buffer)',
+  /new THREE\.WebGLRenderer\(\{ antialias:true, preserveDrawingBuffer:true \}\)/.test(src));
+check('exportViewPNG() uses canvas.toBlob(), not a synchronous toDataURL() (toBlob is the non-blocking, non-main-thread-stalling API for this)',
+  /function exportViewPNG\(\)\{[\s\S]*?renderer\.domElement\.toBlob\(/.test(src));
+
 /* ===================== Summary ===================== */
 console.log(`\n${BOLD}${'-'.repeat(40)}${RESET}`);
 console.log(`${GREEN}${pass} passed${RESET}, ${fail ? RED : DIM}${fail} failed${RESET}`);

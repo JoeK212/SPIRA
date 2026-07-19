@@ -4,6 +4,57 @@ Interactive explorer of architectural deformation operations — twisting, taper
 Joe.K · axisbim.io
 
 CHANGELOG
+v1.39.0 - 2026-07-18 - Added "Export view (.png)" to the Export section — second item on the
+         feature-list priority order (tolerance solver, then this). Captures exactly what's on the
+         WebGL canvas at the moment of the click: current camera angle, Perspective/Orthographic
+         projection (v1.38.0), the solid, and every in-scene overlay (axis, rulings, point labels —
+         real Sprite/Mesh/LineSegments objects, so they render into the canvas like anything else).
+         Added preserveDrawingBuffer:true to the renderer, required for canvas.toBlob() to reliably
+         capture anything in a continuously-rendering app — WebGL clears its drawing buffer after
+         compositing by default, so without this flag a screenshot taken any time after the frame
+         that drew it can come back blank. Disclosed the real limitation directly in the button's
+         own description rather than leaving it to be discovered: the sidebar HUD panel and the
+         panel-warp legend are separate HTML elements positioned over the canvas via CSS, not part
+         of the Three.js scene, so they can't be captured this way and aren't included.
+v1.38.0 - 2026-07-18 - Added a real Perspective/Orthographic projection toggle, per user request:
+         "we have top front home views which are just oriented 3d views. we need real ortho views."
+         Correct — Top and Front were true to their view DIRECTION but still perspective-projected,
+         so even a straight-down plan or straight-on elevation had perspective foreshortening, not
+         the true parallel projection a real plan/elevation view needs (the standard CAD convention
+         Revit/AutoCAD/Rhino all follow). Given a choice between ortho-only-for-Top/Front, ortho-
+         everywhere-always, or a toggle, went with a global toggle (persisted in state, applies to
+         Home/Top/Front/free-orbit alike) so it's available whenever wanted rather than tied to
+         which button was last clicked. Two camera objects (perspCamera/orthoCamera) share one
+         positionCameraForFit() — perspective computes a fit distance from FOV math (unchanged from
+         v1.31.0); orthographic instead sets a frustum half-height directly and resets zoom to 1,
+         since an orthographic camera's apparent size comes from its frustum, not its distance from
+         the subject. Switching projection re-fits fresh with the new camera rather than trying to
+         convert a perspective distance into an equivalent ortho zoom (not the same concept, so no
+         such conversion is ever exact) — but preserves the exact view direction and target the user
+         was already looking at/from, so switching only changes how depth projects, never reorients
+         the view or resets pan. resize() updates both cameras' projections every time regardless of
+         which is active, so switching mid-session is always correct without a stale frustum.
+         Verified the fit math against real THREE.js camera objects (not just index.html review):
+         installed three@0.128.0 standalone, built the actual view-projection matrix, and confirmed
+         a point at 99% of the padded radius lands inside the [-1,1] NDC clip volume while one at
+         100.1% falls just outside — the orthographic frustum brackets the model with exactly the
+         same 15% pad the perspective fit already used, boundary-precise in both directions.
+v1.37.0 - 2026-07-18 - Fit-and-finish list fully clear; working through the feature list, highest
+         priority first, starting with the tolerance solver (natural inverse of v1.28.0's
+         subdivision slider). Added "Solve for minimum panels": set a target max warp, click Solve,
+         get the smallest per-face subdivision count that meets it, with a one-click Apply. Sweeps
+         N=1..12 through the exact same subdivideProfileForPanels()/computePanelWarp() calls the
+         live overlay uses — never assumes the roughly-linear warp-vs-width relationship that
+         motivated adding this feature, verifies each N directly, since that relationship is only
+         approximate for non-axis-aligned edges. Reports an honest "not achievable up to 12 panels"
+         with the best available figure when the target is tighter than 12 panels can reach, rather
+         than a misleading result. Deliberately a button, not a live sweep on every rebuild() —
+         re-running up to 12 full panel-warp computations on every slider tick during a live drag
+         (Helix at high resolution especially) risked reintroducing exactly the frame-rate jank the
+         v1.24.0/v1.33.0/v1.34.0 fixes were about avoiding, for a result only actually needed once,
+         on request. Verified headlessly against the already-verified Turning Torso numbers before
+         shipping: target=1000mm finds N=1 (665mm, correctly under), target=100mm finds N=7,
+         tighter targets (50/25/10mm) correctly report not-achievable with best=55.7mm at N=12.
 v1.36.0 - 2026-07-18 - Fit-and-finish list fully clear; started on the feature list (panel schedule
          export, first). Added "Export panel schedule (.csv)", shown alongside the other Panel
          flatness controls only while that overlay is on. One row per panel currently being
@@ -1084,6 +1135,14 @@ v1.0.0 - 2026-07-17 - Initial build. Twist operation on four cross-section prese
     </section>
 
     <section class="group">
+      <h3>Projection</h3>
+      <div class="presets" id="projectionGrid">
+        <button class="preset-btn active" data-projection="perspective">Perspective</button>
+        <button class="preset-btn" data-projection="orthographic">Orthographic</button>
+      </div>
+    </section>
+
+    <section class="group">
       <h3>Deformation parameters</h3>
       <div id="twistParamsBlock">
         <div class="slider-row">
@@ -1257,6 +1316,12 @@ v1.0.0 - 2026-07-17 - Initial build. Twist operation on four cross-section prese
         <input type="range" id="panelSubdivSlider" min="1" max="12" step="1" value="1">
         <div style="font-size:0.72rem; color:var(--muted); margin-top:2px;" id="panelSubdivNote"></div>
       </div>
+      <div class="slider-row" id="toleranceSolverBlock" style="display:none; margin-top:10px; padding-top:10px; border-top:1px solid var(--line);">
+        <div class="top"><span>target tolerance</span><span class="val" id="toleranceTargetVal">25mm</span></div>
+        <input type="range" id="toleranceTargetSlider" min="1" max="50" step="1" value="25">
+        <button class="btn secondary" id="solveToleranceBtn" style="width:100%; margin-top:6px;">Solve for minimum panels</button>
+        <div style="font-size:0.72rem; color:var(--muted); margin-top:6px;" id="toleranceSolverResult"></div>
+      </div>
       <div class="toggle-row" id="colorblindPaletteRow" style="display:none;">
         <span>Colorblind-safe palette</span>
         <div class="switch" data-toggle="colorblindPalette"></div>
@@ -1266,6 +1331,13 @@ v1.0.0 - 2026-07-17 - Initial build. Twist operation on four cross-section prese
 
     <section class="group">
       <h3>Export</h3>
+      <button class="btn secondary" id="exportViewPngBtn" style="width:100%;">Export view (.png)</button>
+      <div style="font-size:0.72rem; line-height:1.5; color:var(--muted); margin-top:6px; margin-bottom:10px; padding-bottom:10px; border-bottom:1px solid var(--line);">
+        Captures the 3D view exactly as shown — current camera angle, Perspective/Orthographic
+        projection, the solid, and every 3D overlay (axis, rulings, point labels, panel colors).
+        The sidebar HUD numbers and the panel-warp legend are separate page elements, not part of
+        the 3D view, so they aren't included.
+      </div>
       <div class="slider-row">
         <div class="top"><span>loft profiles (for JSON export)</span><span class="val" id="loftProfileCountVal">20</span></div>
         <input type="range" id="loftProfileCountSlider" min="3" max="60" step="1" value="20">
@@ -1312,7 +1384,7 @@ v1.0.0 - 2026-07-17 - Initial build. Twist operation on four cross-section prese
 <script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
 <script src="https://cdn.jsdelivr.net/npm/three@0.128.0/examples/js/controls/OrbitControls.js"></script>
 <script>
-const APP_VERSION = '1.36.0';
+const APP_VERSION = '1.39.0';
 
 // ---------- toast ----------
 let toastTimer=null;
@@ -1402,7 +1474,9 @@ const HELP_HTML = `
   (0–50mm) is illustrative, not a sourced tolerance spec — real limits vary by system and
   manufacturer. "Export panel schedule (.csv)" exports one row per panel currently being
   analyzed — width, warp, a severity label matching the on-screen color, and all 4 corner
-  coordinates in the same Z-up convention the loft-profiles export uses.</p>
+  coordinates in the same Z-up convention the loft-profiles export uses. "Solve for minimum
+  panels" is the inverse of the subdivision slider: set a target max warp and it finds the
+  smallest per-face panel count that meets it, with a one-click Apply.</p>
 
   <h4>View navigation</h4>
   <p>Drag to orbit, scroll to zoom, right-drag (or two-finger drag) to pan. <strong>Top</strong>,
@@ -1410,11 +1484,22 @@ const HELP_HTML = `
   architectural plan/elevation/isometric framing — Home also re-fits the camera to whatever's
   currently on screen.</p>
 
+  <h4>Projection</h4>
+  <p>Perspective (the default) has foreshortening, like a photo — farther things look smaller.
+  Orthographic is a true parallel projection with none, the standard for architectural plan and
+  elevation drawings, where sizes need to stay accurate regardless of depth. Switching preserves
+  whatever you're currently looking at and from which direction — only how depth is projected
+  changes, not the view itself.</p>
+
   <h4>Units</h4>
   <p>The Metric/Imperial toggle converts every length, area, and volume readout in the HUD and
   sidebar at once — it doesn't change the underlying model.</p>
 
   <h4>Export</h4>
+  <p>"Export view (.png)" captures the 3D view exactly as shown — camera angle, projection, the
+  solid, and every overlay drawn inside the scene itself (axis, rulings, point labels, panel-warp
+  colors). The sidebar HUD and the panel-warp legend are separate page elements, not part of the
+  3D view, so they aren't included.</p>
   <p>"Export loft profiles (.json)" exports evenly-spaced cross-section profiles up the height,
   meant to be read by the bundled Dynamo script ("Download Dynamo import script") to build the
   current form as native Revit geometry — a genuine curved face per side, not a flat-faceted
@@ -1476,6 +1561,12 @@ const state = {
   helixTubeRM: 0.25,       // 'circle' generator: tube radius
   helixTubeOffsetM: 1.5,   // 'circle' generator: distance from axis to tube center
   units: 'metric',       // 'metric' | 'imperial' — display only; geometry is always stored in meters
+  projection: 'perspective', // v1.38.0: 'perspective' | 'orthographic' — Top/Front/Home were true
+                              // to their view DIRECTION but still perspective-projected, so even a
+                              // straight-down plan or straight-on elevation had perspective
+                              // foreshortening, not the true parallel projection a real plan/
+                              // elevation view needs. Global toggle rather than per-view, so the
+                              // choice persists across Home/Top/Front/free-orbit alike.
   floors: 8,
   floorHeightM: 3.5,     // floor-to-floor height, always stored in meters regardless of display units
   segments: 48,
@@ -1486,6 +1577,9 @@ const state = {
   panelSubdiv: 1, // v1.28.0: how many narrower bays to split each real face/edge into before
                    // measuring panel warp — 1 reproduces the original behavior (one panel spanning
                    // the whole named-corner-to-named-corner edge). See computePanelWarp's caller.
+  toleranceTargetMM: 25, // v1.37.0: target for "Solve for minimum panels" — always stored in mm
+                          // regardless of display units (same convention warpColor()'s 0-50mm scale
+                          // already uses), converted for display via toDisplaySmallLen/smallLenUnit.
   overlays: { axis:true, plane:true, rulings:true, slicerings:true, floorlines:true, wireframe:false, labels:false, normals:false, panelwarp:false, colorblindPalette:false }
 };
 
@@ -1834,17 +1928,38 @@ const host = document.getElementById('canvasHost');
 const scene = new THREE.Scene();
 scene.background = new THREE.Color(0xf4f1ea);
 
-const camera = new THREE.PerspectiveCamera(42, 1, 0.1, 2000); // near/far re-tightened per-model in
-                                                                 // frameCameraDefault/Top/Front below;
-                                                                 // this is just a safe initial value
+// v1.38.0: two camera objects, one active at a time via the `camera` reference below. Both share
+// the same positionCameraForFit() so switching projection re-fits with the new camera's own
+// projection math rather than trying to convert a perspective "distance" into an equivalent
+// orthographic zoom — they aren't the same concept (an orthographic camera's apparent size comes
+// from its frustum width/height, not how far away it sits), so no such conversion is exact anyway;
+// re-fitting fresh is simpler and always correct. orthoCamera's frustum starts at a placeholder —
+// applyOrthoFrustum() sets it for real on the first resize()/fit.
+const perspCamera = new THREE.PerspectiveCamera(42, 1, 0.1, 2000); // near/far re-tightened per-model
+const orthoCamera = new THREE.OrthographicCamera(-1, 1, 1, -1, 0.1, 2000);
+let camera = state.projection === 'orthographic' ? orthoCamera : perspCamera;
+let orthoBaseHalfHeight = 10; // world-space ortho frustum half-height at zoom=1 — set by every fit
 
-const renderer = new THREE.WebGLRenderer({ antialias:true });
+// preserveDrawingBuffer:true so canvas.toBlob() (PNG export, v1.39.0) reliably captures what's on
+// screen — WebGL clears its drawing buffer after compositing by default in a continuously-rendering
+// app like this one (animate()'s requestAnimationFrame loop), so without this flag a screenshot
+// taken any time after the frame that drew it can come back blank.
+const renderer = new THREE.WebGLRenderer({ antialias:true, preserveDrawingBuffer:true });
 renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
 host.appendChild(renderer.domElement);
 
-const controls = new THREE.OrbitControls(camera, renderer.domElement);
+let controls = new THREE.OrbitControls(camera, renderer.domElement);
 controls.enableDamping = true;
 controls.dampingFactor = 0.08;
+
+function currentAspect(){ return host.clientWidth / Math.max(host.clientHeight, 1); }
+// OrthographicCamera has no .aspect property (unlike PerspectiveCamera) — its frustum is absolute
+// left/right/top/bottom, so the aspect ratio has to be folded in by hand whenever it's set.
+function applyOrthoFrustum(){
+  const halfW = orthoBaseHalfHeight * currentAspect();
+  orthoCamera.left = -halfW; orthoCamera.right = halfW;
+  orthoCamera.top = orthoBaseHalfHeight; orthoCamera.bottom = -orthoBaseHalfHeight;
+}
 
 // ---------- view framing (Home / Top / Front buttons) ----------
 // Camera framing fits the actual rendered bounding box — accounts for footprint width/depth as
@@ -1859,20 +1974,44 @@ controls.dampingFactor = 0.08;
 // the distance was chosen purely from height with no awareness of the viewport's aspect ratio or
 // the model's actual width. User report/screenshot: Front view showing the tower nearly edge-to-edge
 // vertically with huge dead space on both sides — not actually "zoomed to fit," just coincidentally
-// tall enough to reach the frame's top and bottom with no margin. All three view buttons now share
-// one fit calculation (real Box3, circumscribed-sphere radius, checked against both horizontal and
-// vertical FOV — whichever is more restrictive — with 15% padding), so "zoom to fit, centered" means
-// the same thing everywhere regardless of which axis happens to be the tight one.
+// tall enough to reach the frame's top and bottom with no margin. All three view buttons share one
+// fit calculation (real Box3, circumscribed-sphere radius), so "zoom to fit, centered" means the
+// same thing everywhere regardless of which axis happens to be the tight one.
 function fitBoxDistance(){
   const box = new THREE.Box3().setFromObject(solidGroup);
   if(box.isEmpty()) return null;
   const center = box.getCenter(new THREE.Vector3());
   const size = box.getSize(new THREE.Vector3());
   const radius = size.length() / 2; // exact circumscribed-sphere radius of the bounding box
-  const vFov = camera.fov * Math.PI/180;
-  const hFov = 2 * Math.atan(Math.tan(vFov/2) * camera.aspect);
-  const fitDist = Math.max(radius / Math.sin(vFov/2), radius / Math.sin(hFov/2)) * 1.15; // 15% pad
-  return { center, radius, dist: Math.max(fitDist, 6) };
+  return { center, radius };
+}
+// Positions the CURRENTLY ACTIVE camera at target + camDir*dist, looking at target, sized to fit
+// radius. v1.38.0: handles both projection types — perspective computes a distance from FOV math
+// (checked against both horizontal and vertical FOV, whichever is more restrictive, with 15%
+// padding, same as before); orthographic instead sets a frustum half-height directly and resets
+// zoom to 1, since an orthographic camera's apparent size comes from its frustum, not its distance —
+// "dist" for ortho only matters for near/far clipping and giving OrbitControls a sensible orbit
+// radius, not for how big the model looks.
+function positionCameraForFit(camDir, target, radius){
+  let dist;
+  if(camera.isPerspectiveCamera){
+    const vFov = camera.fov * Math.PI/180;
+    const hFov = 2 * Math.atan(Math.tan(vFov/2) * currentAspect());
+    dist = Math.max(Math.max(radius / Math.sin(vFov/2), radius / Math.sin(hFov/2)) * 1.15, 6);
+    camera.near = Math.max(dist*0.01, 0.01);
+    camera.far = dist + radius*2 + 50;
+  } else {
+    orthoBaseHalfHeight = Math.max(radius * 1.15, 0.5); // same 15% pad as the perspective fit
+    camera.zoom = 1;
+    applyOrthoFrustum();
+    dist = Math.max(radius * 3, 6); // arbitrary for ortho — doesn't affect apparent size, just clip/orbit range
+    camera.near = Math.max(dist*0.01, 0.01);
+    camera.far = dist + radius*2 + 50;
+  }
+  camera.updateProjectionMatrix();
+  camera.position.copy(target.clone().add(camDir.clone().multiplyScalar(dist)));
+  controls.target.copy(target);
+  controls.update();
 }
 function frameCameraDefault(){
   const camDir = new THREE.Vector3(9, 8, 11).normalize();
@@ -1882,78 +2021,66 @@ function frameCameraDefault(){
     // Defensive fallback for a call before solidGroup has any geometry (shouldn't happen in normal
     // use, since rebuild() calls this itself once actual geometry exists — see pendingReframe).
     const h = totalHeightM();
-    const camDist = Math.max(h * 0.58, 6); // 0.58 reproduces the old fixed (9,8,11) framing at h=28m
-    camera.near = Math.max(camDist*0.01, 0.01);
-    camera.far = camDist*4 + h*4 + 50;
-    camera.updateProjectionMatrix();
-    camera.position.copy(camDir.multiplyScalar(camDist));
-    controls.target.set(0, h/2, 0);
-    controls.update();
+    positionCameraForFit(camDir, new THREE.Vector3(0, h/2, 0), Math.max(h*0.3, 5));
     return;
   }
-  const { center, radius, dist } = fit;
-  // near/far scale with the model instead of a fixed range — a fixed far=200 clipped the entire
-  // model for anything larger than ~200 units (a real-scale case study like Cayan Tower is 306m
-  // tall), rendering a blank canvas even though framing math itself was correct.
-  camera.near = Math.max(dist*0.01, 0.01);
-  camera.far = dist + radius*2 + 50;
-  camera.updateProjectionMatrix();
-  camera.position.copy(center.clone().add(camDir.multiplyScalar(dist)));
-  controls.target.copy(center);
-  controls.update();
+  positionCameraForFit(camDir, fit.center, fit.radius);
 }
 // Top: looks straight down the world y-axis — the standard architectural plan view. A perfectly
 // vertical look direction is a known OrbitControls singularity (its internal spherical-coordinate
 // math degenerates when the camera-to-target vector aligns with the up vector), so camera.up is
-// swapped to a horizontal axis and the camera position gets a sub-millimeter epsilon offset — both
-// standard workarounds, visually imperceptible, that keep the controls' math well-defined.
+// swapped to a horizontal axis and the look direction gets a sub-millimeter horizontal epsilon —
+// both standard workarounds, visually imperceptible, that keep the controls' math well-defined.
 function frameCameraTop(){
   camera.up.set(0, 0, -1);
+  const camDir = new THREE.Vector3(0.001, 1, 0.001).normalize();
   const fit = fitBoxDistance();
   if(!fit){
     const h = totalHeightM();
-    const dist = Math.max(h * 0.9, 8);
-    camera.near = Math.max(dist*0.01, 0.01);
-    camera.far = dist*2 + h*2 + 50;
-    camera.updateProjectionMatrix();
-    camera.position.set(0.001, h/2 + dist, 0.001);
-    controls.target.set(0, h/2, 0);
-    controls.update();
+    positionCameraForFit(camDir, new THREE.Vector3(0, h/2, 0), Math.max(h*0.3, 5));
     return;
   }
-  const { center, radius, dist } = fit;
-  camera.near = Math.max(dist*0.01, 0.01);
-  camera.far = dist + radius*2 + 50;
-  camera.updateProjectionMatrix();
-  camera.position.set(center.x+0.001, center.y + dist, center.z+0.001);
-  controls.target.copy(center);
-  controls.update();
+  positionCameraForFit(camDir, fit.center, fit.radius);
 }
 // Front: looks horizontally toward the model along -z — the standard architectural elevation view.
 function frameCameraFront(){
   camera.up.set(0, 1, 0);
+  const camDir = new THREE.Vector3(0, 0, 1);
   const fit = fitBoxDistance();
   if(!fit){
     const h = totalHeightM();
-    const dist = Math.max(h * 0.75, 8);
-    camera.near = Math.max(dist*0.01, 0.01);
-    camera.far = dist*2 + h*2 + 50;
-    camera.updateProjectionMatrix();
-    camera.position.set(0, h/2, dist);
-    controls.target.set(0, h/2, 0);
-    controls.update();
+    positionCameraForFit(camDir, new THREE.Vector3(0, h/2, 0), Math.max(h*0.3, 5));
     return;
   }
-  const { center, radius, dist } = fit;
-  camera.near = Math.max(dist*0.01, 0.01);
-  camera.far = dist + radius*2 + 50;
-  camera.updateProjectionMatrix();
-  camera.position.set(center.x, center.y, center.z + dist);
-  controls.target.copy(center);
-  controls.update();
+  positionCameraForFit(camDir, fit.center, fit.radius);
 }
 // First-build camera fit happens inside rebuild() itself (see pendingReframe below), once actual
 // geometry exists — calling frameCameraDefault() here would just hit its empty-box fallback.
+
+// Perspective <-> Orthographic toggle. Re-fits with the NEW camera rather than attempting to
+// translate the old camera's distance into an equivalent zoom/frustum for the new one (not the
+// same concept between projection types, as above) — but preserves the exact view direction and
+// target the user was already looking at/from, so switching changes only how depth is projected,
+// never reorients the view or resets pan.
+function switchProjection(newProjection){
+  if(state.projection === newProjection) return;
+  const camDir = new THREE.Vector3();
+  camera.getWorldDirection(camDir).negate(); // camera-from-target direction, not the look vector
+  const target = controls.target.clone();
+  const up = camera.up.clone();
+
+  state.projection = newProjection;
+  camera = newProjection === 'orthographic' ? orthoCamera : perspCamera;
+
+  controls.dispose();
+  controls = new THREE.OrbitControls(camera, renderer.domElement);
+  controls.enableDamping = true;
+  controls.dampingFactor = 0.08;
+
+  camera.up.copy(up);
+  positionCameraForFit(camDir, target, lastModelRadius);
+  persist();
+}
 
 scene.add(new THREE.AmbientLight(0xffffff, 0.65));
 const key = new THREE.DirectionalLight(0xffffff, 0.9);
@@ -1969,8 +2096,10 @@ scene.add(solidGroup, overlayGroup);
 
 function resize(){
   const w = host.clientWidth, h = host.clientHeight;
-  camera.aspect = w/h;
-  camera.updateProjectionMatrix();
+  perspCamera.aspect = w/h;
+  perspCamera.updateProjectionMatrix();
+  applyOrthoFrustum();
+  orthoCamera.updateProjectionMatrix();
   renderer.setSize(w, h);
 }
 window.addEventListener('resize', resize);
@@ -3100,6 +3229,7 @@ const helixTubeOffsetSlider = document.getElementById('helixTubeOffsetSlider');
 const footprintWidthSlider = document.getElementById('footprintWidthSlider');
 const footprintDepthSlider = document.getElementById('footprintDepthSlider');
 const panelSubdivSlider = document.getElementById('panelSubdivSlider');
+const toleranceTargetSlider = document.getElementById('toleranceTargetSlider');
 alphaSlider.value = state.alphaMax;
 taperVSlider.value = state.taperV;
 taperWSlider.value = state.taperW;
@@ -3110,6 +3240,12 @@ loftProfileCountSlider.value = state.loftProfileCount;
 helixTurnsSlider.value = state.helixTurns;
 panelSubdivSlider.value = state.panelSubdiv;
 document.getElementById('panelSubdivVal').textContent = state.panelSubdiv + (state.panelSubdiv===1 ? ' panel' : ' panels');
+toleranceTargetSlider.value = state.toleranceTargetMM;
+function syncToleranceTargetLabel(){
+  document.getElementById('toleranceTargetVal').textContent =
+    toDisplaySmallLen(state.toleranceTargetMM/1000).toFixed(0) + smallLenUnit();
+}
+syncToleranceTargetLabel();
 
 // v1.34.0: sliders that can change the model's actual size/shape extent (as opposed to purely
 // visual density — resolution, loft profile count, panel subdivision) previously never triggered a
@@ -3253,8 +3389,20 @@ const unitsGrid = document.getElementById('unitsGrid');
     syncShearSliderRange();
     syncHelixSliderRanges();
     syncFootprintSliderRange();
-    syncSliderLabels(); persist(); rebuild();
+    syncSliderLabels(); syncToleranceTargetLabel(); persist(); rebuild();
     toast(state.units === 'metric' ? 'Metric units' : 'Imperial units');
+  });
+});
+
+const projectionGrid = document.getElementById('projectionGrid');
+[...projectionGrid.children].forEach(btn=>{
+  btn.classList.toggle('active', btn.dataset.projection === state.projection);
+  btn.addEventListener('click', ()=>{
+    if(btn.dataset.projection === state.projection) return;
+    switchProjection(btn.dataset.projection);
+    [...projectionGrid.children].forEach(b=>b.classList.remove('active'));
+    btn.classList.add('active');
+    toast(state.projection === 'orthographic' ? 'Orthographic projection' : 'Perspective projection');
   });
 });
 
@@ -3442,6 +3590,55 @@ panelSubdivSlider.addEventListener('input', e=>{
   persist(); rebuild();
 });
 
+toleranceTargetSlider.addEventListener('input', e=>{
+  state.toleranceTargetMM = parseInt(e.target.value);
+  syncToleranceTargetLabel();
+  persist();
+  document.getElementById('toleranceSolverResult').textContent = ''; // stale once the target moves
+});
+
+// v1.37.0: "Solve for minimum panels" — inverse of the subdivision slider (v1.28.0). Given a target
+// max warp, sweeps N=1..12 through the exact same subdivideProfileForPanels()/computePanelWarp()
+// calls the live overlay uses (never assumes the roughly-linear warp-vs-width relationship that
+// motivated adding this — verifies each N directly, since that relationship is only approximate
+// for non-axis-aligned edges) and reports the smallest N that meets the target, with a one-click
+// Apply. An explicit button rather than a live sweep on every rebuild(), deliberately — sweeping up
+// to 12 full panel-warp computations on every slider tick during a live drag (Helix at high
+// resolution especially) risked reintroducing exactly the kind of frame-rate jank the v1.24.0/
+// v1.33.0/v1.34.0 fixes were about avoiding, for a result that's only actually needed once, on
+// request, not continuously.
+function solveTolerance(){
+  const resultEl = document.getElementById('toleranceSolverResult');
+  if(!lastBuild){ resultEl.textContent = 'Nothing to solve yet'; return; }
+  const { mode, profile, h, closed, n, segs, evalPoint } = lastBuild;
+  const loopCount = mode === 'helix' ? segs : state.floors;
+  const stepM = mode === 'helix' ? h/segs : state.floorHeightM;
+  const u2 = smallLenUnit();
+  const targetDisp = toDisplaySmallLen(state.toleranceTargetMM/1000).toFixed(0) + u2;
+  let found = null, bestMM = Infinity, bestN = 1;
+  for(let N=1; N<=12; N++){
+    const { subProfile, subN } = subdivideProfileForPanels(profile, n, closed, N);
+    const { maxWarpM } = computePanelWarp(subProfile, evalPoint, subN, closed, loopCount, stepM);
+    const maxWarpMM = maxWarpM*1000;
+    if(maxWarpMM < bestMM){ bestMM = maxWarpMM; bestN = N; }
+    if(found === null && maxWarpMM <= state.toleranceTargetMM) found = N;
+  }
+  if(found !== null){
+    resultEl.innerHTML = `Use <strong>${found}</strong> panel${found===1?'':'s'} per face to stay under ${targetDisp}. ` +
+      `<a href="#" id="applyToleranceBtn" style="text-decoration:underline; cursor:pointer; color:var(--prussian);">Apply</a>`;
+    document.getElementById('applyToleranceBtn').addEventListener('click', (e)=>{
+      e.preventDefault();
+      state.panelSubdiv = found;
+      panelSubdivSlider.value = found;
+      document.getElementById('panelSubdivVal').textContent = found + (found===1?' panel':' panels');
+      persist(); rebuild();
+    });
+  } else {
+    resultEl.textContent = `Not achievable up to 12 panels/face — best is ${toDisplaySmallLen(bestMM/1000).toFixed(1)}${u2} at ${bestN} panels. Try a looser target.`;
+  }
+}
+document.getElementById('solveToleranceBtn').addEventListener('click', solveTolerance);
+
 document.querySelectorAll('.switch').forEach(sw=>{
   const key = sw.dataset.toggle;
   if(state.overlays[key]) sw.classList.add('on');
@@ -3455,13 +3652,15 @@ document.querySelectorAll('.switch').forEach(sw=>{
 // v1.30.0: Panel flatness (v1.27.0) hides the solid itself while it's on, so the Wireframe toggle
 // has nothing left to wireframe and silently does nothing — dimming it (rather than leaving a
 // switch that flips with no visible effect) tells the user why, instead of leaving them to wonder
-// if it's broken. Same panelwarp-dependent-UI update also covers the subdivision slider (v1.28.0)
-// and the colorblind-safe palette toggle (v1.35.0), both only meaningful while Panel flatness is on.
+// if it's broken. Same panelwarp-dependent-UI update also covers the subdivision slider (v1.28.0),
+// the colorblind-safe palette toggle (v1.35.0), and the tolerance solver (v1.37.0) — all only
+// meaningful while Panel flatness is on.
 function syncPanelwarpDependentUI(){
   document.getElementById('panelSubdivBlock').style.display = state.overlays.panelwarp ? '' : 'none';
   document.getElementById('wireframeRow').classList.toggle('disabled', state.overlays.panelwarp);
   document.getElementById('colorblindPaletteRow').style.display = state.overlays.panelwarp ? '' : 'none';
   document.getElementById('exportPanelScheduleBtn').style.display = state.overlays.panelwarp ? '' : 'none';
+  document.getElementById('toleranceSolverBlock').style.display = state.overlays.panelwarp ? '' : 'none';
 }
 syncPanelwarpDependentUI();
 
@@ -3587,6 +3786,38 @@ function loadCaseStudy(key){
 document.querySelectorAll('[data-casestudy]').forEach(btn=>{
   btn.addEventListener('click', ()=> loadCaseStudy(btn.dataset.casestudy));
 });
+
+// ---------- loft profiles (.json) export ----------
+// ---------- view (.png) export ----------
+// v1.39.0: captures exactly what's rendered on the WebGL canvas at the moment of the click —
+// current camera angle/projection (Perspective or Orthographic, v1.38.0), the solid, and every
+// overlay that lives inside the Three.js scene itself (axis, base plane, rulings, slice rings,
+// floor lines, point/origin labels — all real Sprite/Mesh/LineSegments objects in the scene, so
+// they render into the canvas like anything else). The sidebar HUD panel and the panel-warp legend
+// are separate HTML elements positioned on top of the canvas via CSS, not part of the WebGL scene,
+// so canvas.toBlob() can't see them — disclosed in the button's own description rather than
+// silently producing a screenshot that's missing something the user might expect. Forces one fresh
+// renderer.render() immediately before capture so the exported image reflects state that's fully
+// current — animate()'s requestAnimationFrame loop means the canvas already shows the latest frame
+// in practice, but a direct re-render right before reading removes any doubt (and costs nothing:
+// this is what animate() calls every 16ms anyway).
+function exportViewPNG(){
+  renderer.render(scene, camera);
+  renderer.domElement.toBlob((blob)=>{
+    if(!blob){ toast('Could not export image'); return; }
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    const stamp = new Date().toISOString().slice(0,19).replace(/[:T]/g,'-');
+    a.href = url;
+    a.download = `SPIRA_${state.mode}_view_${stamp}.png`;
+    document.body.appendChild(a);
+    a.click();
+    document.body.removeChild(a);
+    URL.revokeObjectURL(url);
+    toast('Exported view as PNG');
+  }, 'image/png');
+}
+document.getElementById('exportViewPngBtn').addEventListener('click', exportViewPNG);
 
 // ---------- loft profiles (.json) export ----------
 // Exports N evenly spaced cross-section profiles up the height, meant to be consumed by a script

@@ -97,7 +97,10 @@ yellow stops, which read correctly by brightness alone rather than relying on di
 from green. "Export panel schedule (.csv)" exports one row per panel currently being analyzed —
 width, warp, a severity label matching the on-screen color, and all 4 corner coordinates in the
 same Z-up convention the loft-profiles export uses — recomputed fresh from the current
-floors/subdivision, so it always matches what's on screen.
+floors/subdivision, so it always matches what's on screen. "Solve for minimum panels" is the
+inverse of the subdivision slider: set a target max warp and click Solve for the smallest
+per-face panel count that meets it (or an honest "not achievable" if 12 panels isn't enough),
+with a one-click Apply.
 
 Comparing Twist against Bend with this overlay on is a good demonstration: Bend's panels come out
 exactly flat at any angle, since it only sweeps the cross-section along an arc without ever
@@ -123,16 +126,26 @@ dimensions, footprint width/depth) accept feet-inches notation in imperial mode 
 (and floors/floor-height, where relevant) to their original defaults.
 
 **View navigation.** Top (plan), Front (elevation), and Home buttons sit in the bottom-right of the
-viewport for standard orthographic-ish framing, alongside the usual orbit/pan/zoom — all three
-zoom to fit the actual model, centered, regardless of how tall/narrow or wide/short it is, and
-Home re-fits to whatever's currently on screen. A small marker labeled "0,0,0" is always visible
-at the true world origin when the Axis overlay is on, as a fixed reference point regardless of
-view.
+viewport for standard architectural framing, alongside the usual orbit/pan/zoom — all three zoom to
+fit the actual model, centered, regardless of how tall/narrow or wide/short it is, and Home re-fits
+to whatever's currently on screen. A small marker labeled "0,0,0" is always visible at the true
+world origin when the Axis overlay is on, as a fixed reference point regardless of view.
+
+**Projection.** A Perspective/Orthographic toggle switches between camera-like foreshortening
+(the default) and a true parallel projection with none — the standard for architectural plan and
+elevation drawings, where sizes need to read accurately regardless of depth rather than appearing
+smaller the farther they are from the camera. Applies everywhere (Home, Top, Front, and free orbit
+alike), and switching preserves the current view direction and target — only how depth projects
+changes, never the view itself.
 
 **Help.** The "?" button in the header opens usage documentation for the app's own controls —
 separate from the Reference panel below, which explains the math behind each operation.
 
-**Export.** "Export loft profiles (.json)" exports N evenly spaced cross-section profiles up the
+**Export.** "Export view (.png)" captures the 3D view exactly as shown — camera angle, projection,
+the solid, and every overlay drawn inside the scene itself. The sidebar HUD and the panel-warp
+legend are separate page elements, not part of the 3D view, so they aren't included.
+
+"Export loft profiles (.json)" exports N evenly spaced cross-section profiles up the
 height, meant for the bundled Dynamo script ("Download Dynamo import script") to consume — it
 builds the current form as native Revit geometry (via `GeometryCreationUtilities.CreateLoftGeometry`)
 rather than a flat-faceted approximation, so a curved operation like Twist or Bend comes in as one

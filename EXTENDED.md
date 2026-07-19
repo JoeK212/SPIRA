@@ -215,17 +215,57 @@ text as something to check with the overlay.
 
 ## Camera framing
 
-`fitBoxDistance()` fits an actual Three.js `Box3` computed from the rendered solid — the
-circumscribed-sphere radius of that box, checked against both horizontal and vertical FOV (whichever
-is more restrictive, so it doesn't under-frame a wide/short shape when the viewport happens to be
-narrower than tall), with 15% padding. `Box3.setFromObject()` traverses every descendant of
+`fitBoxDistance()` fits an actual Three.js `Box3` computed from the rendered solid, returning its
+center and circumscribed-sphere radius. `Box3.setFromObject()` traverses every descendant of
 `solidGroup` regardless of `.visible`, so this stays correct even while Panel flatness (warp) hides
 the solid mesh itself (see above).
 
-`frameCameraDefault()` (Home), `frameCameraTop()`, and `frameCameraFront()` all call this one
-shared helper and only differ in which axis they position the camera along and which way `up`
-points — Top swaps `up` to a horizontal axis and gives the camera a sub-millimeter position epsilon
-(both standard workarounds for a known OrbitControls singularity when the camera-to-target vector
+**Perspective vs Orthographic (v1.38.0).** Two camera objects, `perspCamera` and `orthoCamera`, with
+`camera` a plain variable pointing at whichever is active — read at call-time everywhere in the
+codebase (raycasting, the render loop, `getWorldDirection`), so nothing else needs to know which
+type is current. `positionCameraForFit(camDir, target, radius)` is the one function that actually
+knows the difference: for perspective, it derives a fit *distance* from FOV math (checked against
+both horizontal and vertical FOV, whichever is more restrictive, with 15% padding — this is the
+same math `fitBoxDistance()` used to do directly before the refactor). For orthographic, distance
+is nearly irrelevant to apparent size — an orthographic camera's on-screen size comes from its
+*frustum* (`left`/`right`/`top`/`bottom`), not how far away it sits — so instead it sets
+`orthoBaseHalfHeight = radius * 1.15` (the same 15% pad, just applied to a frustum half-height
+instead of a distance), resets `camera.zoom = 1`, and calls `applyOrthoFrustum()` to fold in the
+current aspect ratio (`OrthographicCamera` has no `.aspect` property the way `PerspectiveCamera`
+does — the aspect has to be multiplied into the frustum half-width by hand). `dist` is still set for
+the orthographic branch (`radius * 3`, arbitrary) purely to give the camera a real position for
+`near`/`far` clipping and a sensible `OrbitControls` orbit radius — it has no effect on how big the
+model appears, unlike the perspective branch where distance is the *entire* mechanism.
+
+Verified this boundary is exact, not just "looks about right": built the real view-projection
+matrix from an `OrthographicCamera` positioned by this exact function (installed `three@0.128.0`
+standalone in Node, outside the app, to test against the actual library rather than a
+reimplementation) and projected two points along the padded radius — one at 99% (must be inside the
+`[-1,1]` NDC clip volume) and one at 100.1% (must fall just outside). Both landed exactly where the
+15% pad predicts, in both directions.
+
+`resize()` updates *both* cameras' projections on every resize regardless of which is active
+(`perspCamera.aspect` + `updateProjectionMatrix()`; `applyOrthoFrustum()` + `updateProjectionMatrix()`
+for the ortho camera), so switching projection mid-session never hits a stale frustum sized for an
+old window dimension.
+
+**Switching projection.** `switchProjection(newProjection)` does not attempt to convert the old
+camera's distance into an equivalent zoom/frustum for the new one — there's no exact conversion
+between "how far away" (perspective's mechanism) and "how wide a frustum" (orthographic's), so
+trying would only be an approximation. Instead it captures the *current view direction* (via
+`camera.getWorldDirection()`, negated to get the camera-from-target direction) and the current
+`controls.target`, swaps which camera `camera` points to, disposes and recreates `OrbitControls`
+pointed at the new camera (camera swap-in-place on an existing `OrbitControls` instance isn't
+reliably supported across versions, so a fresh instance is the safe choice), and calls
+`positionCameraForFit()` fresh with the preserved direction and target. Net effect: switching
+changes only how depth is projected — never reorients the view, never resets pan — because the
+direction and target it re-fits from are exactly what the user was already looking at and from.
+
+`frameCameraDefault()` (Home), `frameCameraTop()`, and `frameCameraFront()` all call
+`positionCameraForFit()` and only differ in which axis they position the camera along and which way
+`up` points — Top swaps `up` to a horizontal axis and gives the fit direction a sub-millimeter
+horizontal epsilon (`(0.001, 1, 0.001)` normalized, rather than perfectly vertical `(0,1,0)`) —
+both standard workarounds for a known OrbitControls singularity when the camera-to-target vector
 aligns exactly with `up`). This wasn't always true: Top and Front originally used an older,
 separate height-only heuristic (`dist = h × a fixed multiplier`, no bounding box involved) that
 predated `fitBoxDistance()` and was never upgraded to match it — harmless for a roughly
