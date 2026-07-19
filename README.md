@@ -145,6 +145,13 @@ separate from the Reference panel below, which explains the math behind each ope
 the solid, and every overlay drawn inside the scene itself. The sidebar HUD and the panel-warp
 legend are separate page elements, not part of the 3D view, so they aren't included.
 
+"Copy share link" encodes the entire current configuration — mode, preset, every deformation
+parameter, footprint, floors, units, projection, resolution, and overlay settings — into a URL
+(stored in the location hash, never sent to any server) that reproduces the same setup exactly for
+anyone who opens it. A shared link always overrides whatever the recipient's browser had saved
+locally. Camera position isn't part of the link — the model re-fits to view on load the same way
+switching Operations already does.
+
 "Export loft profiles (.json)" exports N evenly spaced cross-section profiles up the
 height, meant for the bundled Dynamo script ("Download Dynamo import script") to consume — it
 builds the current form as native Revit geometry (via `GeometryCreationUtilities.CreateLoftGeometry`)

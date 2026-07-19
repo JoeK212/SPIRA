@@ -210,6 +210,42 @@ check('renderer has preserveDrawingBuffer:true (required for canvas.toBlob() to 
 check('exportViewPNG() uses canvas.toBlob(), not a synchronous toDataURL() (toBlob is the non-blocking, non-main-thread-stalling API for this)',
   /function exportViewPNG\(\)\{[\s\S]*?renderer\.domElement\.toBlob\(/.test(src));
 
+/* ===================== v1.40.0 — shareable URL ===================== */
+// State lives in the location HASH (#s=...), never a query string — a hash never leaves the
+// browser (no server/log ever sees it), the right call for a fully client-side static app.
+sectionHeader('v1.40.0 — shareable URL');
+check('encodeStateToURL() base64-encodes JSON.stringify(state), not some partial/hand-picked subset',
+  /function encodeStateToURL\(\)\{\s*\n\s*const json = JSON\.stringify\(state\);/.test(src));
+check('encodeStateToURL() output is URL-safe (base64url: no +, /, or = padding)',
+  (function(){
+    const m = src.match(/function encodeStateToURL\(\)\{[\s\S]*?\n\}/);
+    return !!m && m[0].includes(".replace(/\\+/g, '-')") && m[0].includes(".replace(/\\//g, '_')")
+      && m[0].includes(".replace(/=+$/, '')");
+  })());
+check('decodeStateFromURLParam() is wrapped in try/catch (malformed/tampered link text must not throw and break page load)',
+  /function decodeStateFromURLParam\(param\)\{\s*\n\s*try\{/.test(src));
+check('shared-link state is applied AFTER the localStorage restore, so a shared link always wins over what this browser already had saved',
+  (function(){
+    const lsIdx = src.indexOf("localStorage.getItem('spira-state')");
+    const urlIdx = src.indexOf('applySharedStateFromURL');
+    return lsIdx !== -1 && urlIdx !== -1 && lsIdx < urlIdx;
+  })());
+check('applySharedStateFromURL() merges overlays as a nested Object.assign, same pattern as the localStorage restore (a shallow Object.assign(state, parsed) alone would replace the whole overlays object, dropping any toggle the link happened not to include)',
+  /if\(parsed\.overlays\) Object\.assign\(state\.overlays, parsed\.overlays\);/.test(src));
+check('copyShareLink() has a textarea+execCommand fallback for contexts without the async Clipboard API, not just a bare navigator.clipboard.writeText() call',
+  (function(){
+    const m = src.match(/async function copyShareLink\(\)\{[\s\S]*?\n\}/);
+    return !!m && m[0].includes('navigator.clipboard') && m[0].includes('execCommand');
+  })());
+check('"Copy share link" button exists and is wired to copyShareLink()',
+  /id="copyShareLinkBtn"/.test(src) && /getElementById\('copyShareLinkBtn'\)\.addEventListener\('click', copyShareLink\)/.test(src));
+check('shareable-URL parsing runs before the slider/DOM sync block that reads from state (so a URL-loaded value is what sliders pick up, not overwritten after the fact)',
+  (function(){
+    const urlIdx = src.indexOf('applySharedStateFromURL');
+    const sliderSyncIdx = src.indexOf('alphaSlider.value = state.alphaMax;');
+    return urlIdx !== -1 && sliderSyncIdx !== -1 && urlIdx < sliderSyncIdx;
+  })());
+
 /* ===================== Summary ===================== */
 console.log(`\n${BOLD}${'-'.repeat(40)}${RESET}`);
 console.log(`${GREEN}${pass} passed${RESET}, ${fail ? RED : DIM}${fail} failed${RESET}`);

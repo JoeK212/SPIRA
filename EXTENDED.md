@@ -404,6 +404,45 @@ strictly better result (one genuine curved face per side) for the modes that mat
 Taper, Bend). The `.sat` exporter was removed once this path was working end-to-end; see the
 CHANGELOG in `index.html` for that history.
 
+## Shareable URL
+
+"Copy share link" (Export section) round-trips the entire `state` object — mode, preset, every
+deformation parameter, footprint size, floors/floor-height, units, projection, resolution,
+panel-subdivision/tolerance-target, every overlay toggle, and FFD control-point offsets — through
+`JSON.stringify` → `btoa` → a URL-safe base64 alphabet (`+`/`/` swapped for `-`/`_`, `=` padding
+dropped since the decoder reconstructs it from length), stored in the location **hash**
+(`#s=<encoded>`), not a query string.
+
+The hash choice is deliberate: a hash is never sent to a server (not in the HTTP request line, not
+in any access log Netlify or anything else keeps), which is the right property for a fully
+client-side static app with no backend to receive a query param anyway. It also means the encoded
+state is genuinely invisible to anything but the browser itself.
+
+On load, `applySharedStateFromURL()` parses `#s=...` and merges it into `state` — using the same
+nested-overlay `Object.assign` pattern the existing localStorage restore already used, so a link
+that only changes (say) `mode` and `alphaMax` doesn't blow away the rest of the recipient's overlay
+toggles. This runs *after* the localStorage restore, so a shared link always wins over whatever the
+recipient's own browser had saved locally; that's the whole point of sending someone a specific
+configuration rather than merely nudging their existing session.
+
+**Camera position/orbit is deliberately not encoded.** `pendingReframe` already defaults to `true`
+(see Camera framing above), so the very first `rebuild()` after a URL-loaded state re-fits the
+camera exactly the way every Operation/preset/case-study switch already does — "zoom to fit,
+centered" on whatever loaded, rather than reproducing the sender's arbitrary orbit angle, which
+would be as likely to be a bad view for the recipient as a good one.
+
+Clipboard write uses the async `navigator.clipboard.writeText()` where available, with a
+temporary offscreen `<textarea>` + `document.execCommand('copy')` fallback for contexts where the
+async API isn't present (e.g. non-HTTPS local preview). Malformed or tampered link text
+(`decodeStateFromURLParam` failing to parse) fails closed — returns `null`, silently falling back
+to the default/localStorage state — rather than throwing and breaking page load.
+
+Verified headlessly before shipping: encoded a default-state object and a modified/non-default one
+(different mode, imperial units, orthographic projection, non-default overlays, non-zero FFD
+offsets) through the real encode/decode functions, confirmed byte-for-byte deep-equality after the
+round trip, and confirmed the encoded output contains none of base64's non-URL-safe characters
+(`+`, `/`, `=`).
+
 ## Verification approach
 
 Every operation's volume (or surface area, for Helix) claim was checked numerically before shipping,

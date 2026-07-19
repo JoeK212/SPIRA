@@ -4,6 +4,22 @@ Interactive explorer of architectural deformation operations — twisting, taper
 Joe.K · axisbim.io
 
 CHANGELOG
+v1.40.0 - 2026-07-19 - Added a shareable URL — third item on the feature-list priority order
+         (tolerance solver, PNG export, then this). "Copy share link" (Export section) encodes the
+         entire state object (mode, preset, every deformation parameter, footprint size, floors/
+         floor-height, units, projection, resolution, panel-subdivision/tolerance-target, every
+         overlay toggle, FFD control-point offsets) as URL-safe base64 in the location hash
+         (#s=...) rather than a query string, since a hash never leaves the browser — no server,
+         no Netlify access log, ever sees it, appropriate for a fully client-side static app. On
+         load, a shared link's state is applied AFTER the existing localStorage restore, so it
+         always wins over whatever the recipient's browser had saved — the whole point of sending
+         a specific configuration. Deliberately does not encode camera orbit/position: pendingReframe
+         already defaults true, so the first rebuild() after load re-fits the camera the same way
+         every Operation/preset switch already does (v1.23.0), which reproduces the sender's intent
+         better than pinning their exact viewing angle would. Verified round-trip headlessly (encode
+         every mode's default and a modified/non-default state, decode, deep-equal check against the
+         original) before wiring into the UI. Clipboard write uses the async Clipboard API with a
+         textarea+execCommand fallback for contexts where it's unavailable.
 v1.39.0 - 2026-07-18 - Added "Export view (.png)" to the Export section — second item on the
          feature-list priority order (tolerance solver, then this). Captures exactly what's on the
          WebGL canvas at the moment of the click: current camera angle, Perspective/Orthographic
@@ -1338,6 +1354,13 @@ v1.0.0 - 2026-07-17 - Initial build. Twist operation on four cross-section prese
         The sidebar HUD numbers and the panel-warp legend are separate page elements, not part of
         the 3D view, so they aren't included.
       </div>
+      <button class="btn secondary" id="copyShareLinkBtn" style="width:100%;">Copy share link</button>
+      <div style="font-size:0.72rem; line-height:1.5; color:var(--muted); margin-top:6px; margin-bottom:10px; padding-bottom:10px; border-bottom:1px solid var(--line);">
+        Copies a URL that reproduces this exact configuration — mode, preset, every deformation
+        parameter, footprint, floors, units, projection, and overlay settings — for anyone who
+        opens it. Everything lives in the link itself (nothing sent to a server), so it works from
+        any copy of this page.
+      </div>
       <div class="slider-row">
         <div class="top"><span>loft profiles (for JSON export)</span><span class="val" id="loftProfileCountVal">20</span></div>
         <input type="range" id="loftProfileCountSlider" min="3" max="60" step="1" value="20">
@@ -1384,7 +1407,7 @@ v1.0.0 - 2026-07-17 - Initial build. Twist operation on four cross-section prese
 <script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
 <script src="https://cdn.jsdelivr.net/npm/three@0.128.0/examples/js/controls/OrbitControls.js"></script>
 <script>
-const APP_VERSION = '1.39.0';
+const APP_VERSION = '1.40.0';
 
 // ---------- toast ----------
 let toastTimer=null;
@@ -1500,6 +1523,10 @@ const HELP_HTML = `
   solid, and every overlay drawn inside the scene itself (axis, rulings, point labels, panel-warp
   colors). The sidebar HUD and the panel-warp legend are separate page elements, not part of the
   3D view, so they aren't included.</p>
+  <p>"Copy share link" copies a URL with the entire current configuration encoded into it (mode,
+  preset, every deformation parameter, footprint, floors, units, projection, resolution, and
+  overlay settings) — opening that link reproduces the same setup exactly, on any device. The
+  configuration lives entirely in the link itself; nothing is uploaded or stored on a server.</p>
   <p>"Export loft profiles (.json)" exports evenly-spaced cross-section profiles up the height,
   meant to be read by the bundled Dynamo script ("Download Dynamo import script") to build the
   current form as native Revit geometry — a genuine curved face per side, not a flat-faceted
@@ -1591,6 +1618,79 @@ try{
 function persist(){
   localStorage.setItem('spira-state', JSON.stringify(state));
 }
+
+// ---------- shareable URL (v1.40.0) ----------
+// Encodes the entire `state` object into a URL-safe base64 string stored in the location hash
+// (#s=...), not a query string — a hash never leaves the browser (not sent to any server, not
+// logged, not appended by Netlify's static hosting), which matters since this is a client-only
+// static app with nowhere for a query param to be read anyway. Round-trips the exact same state
+// object localStorage persistence uses, so a shared link reproduces a session exactly: mode,
+// preset, every deformation parameter, footprint size, floors/floor-height, units, projection,
+// resolution, panel-subdivision/tolerance-target, every overlay toggle, and FFD control-point
+// offsets. Deliberately does NOT encode camera position/orbit — pendingReframe defaults true, so
+// the very first rebuild() after a URL-loaded state already re-fits the camera to whatever loaded
+// (same "zoom to fit, centered" every Operation/preset switch already relies on, see v1.23.0),
+// which is more useful to a recipient than reproducing the sender's specific orbit angle.
+function encodeStateToURL(){
+  const json = JSON.stringify(state);
+  // btoa() only accepts Latin1 bytes; state is pure ASCII (numbers, mode-name strings, booleans)
+  // so this doesn't need the unescape/encodeURIComponent UTF-8 dance a truly free-text field would.
+  const b64 = btoa(json);
+  // Base64's own alphabet (+ / =) isn't URL-safe as-is (+ and / have URL meaning, = is padding
+  // browsers/servers can mangle); swap to the standard "base64url" alphabet and drop padding,
+  // since the decoder below can reconstruct padding from length alone.
+  return b64.replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, '');
+}
+function decodeStateFromURLParam(param){
+  try{
+    let b64 = param.replace(/-/g, '+').replace(/_/g, '/');
+    while(b64.length % 4) b64 += '=';
+    const json = atob(b64);
+    const parsed = JSON.parse(json);
+    if(typeof parsed !== 'object' || parsed === null) return null;
+    return parsed;
+  }catch(e){ return null; }
+}
+function buildShareURL(){
+  return location.origin + location.pathname + '#s=' + encodeStateToURL();
+}
+async function copyShareLink(){
+  const url = buildShareURL();
+  try{
+    if(navigator.clipboard && navigator.clipboard.writeText){
+      await navigator.clipboard.writeText(url);
+    } else {
+      // Fallback for browsers/contexts without the async Clipboard API (e.g. non-HTTPS local
+      // preview): a temporary offscreen textarea + the legacy execCommand copy path.
+      const ta = document.createElement('textarea');
+      ta.value = url;
+      ta.style.position = 'fixed';
+      ta.style.opacity = '0';
+      document.body.appendChild(ta);
+      ta.focus(); ta.select();
+      document.execCommand('copy');
+      document.body.removeChild(ta);
+    }
+    toast('Share link copied to clipboard');
+  }catch(e){
+    toast('Could not copy link — see console');
+    console.error('copyShareLink failed', e);
+  }
+}
+// Loading a shared link: parse #s=... on startup and merge it into state, same shape as the
+// localStorage restore above but applied AFTER it, so a shared link always wins over whatever
+// this browser had saved locally — the whole point of sending someone a specific configuration.
+// Runs before any DOM/slider sync below (all of which read from `state`), so nothing downstream
+// needs its own special case for "was this state URL-loaded or default."
+(function applySharedStateFromURL(){
+  const hash = location.hash || '';
+  const m = hash.match(/(?:^#|[&;])s=([^&;]+)/) || hash.match(/^#s=([^&;]+)/);
+  if(!m) return;
+  const parsed = decodeStateFromURLParam(m[1]);
+  if(!parsed) return;
+  Object.assign(state, parsed);
+  if(parsed.overlays) Object.assign(state.overlays, parsed.overlays);
+})();
 
 // ---------- profiles (footprint polygons in the x–z plane, roughly unit-radius) ----------
 const PROFILES = {
@@ -3818,6 +3918,7 @@ function exportViewPNG(){
   }, 'image/png');
 }
 document.getElementById('exportViewPngBtn').addEventListener('click', exportViewPNG);
+document.getElementById('copyShareLinkBtn').addEventListener('click', copyShareLink);
 
 // ---------- loft profiles (.json) export ----------
 // Exports N evenly spaced cross-section profiles up the height, meant to be consumed by a script
