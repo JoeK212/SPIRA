@@ -4,6 +4,16 @@ Interactive explorer of architectural deformation operations — twisting, taper
 Joe.K · axisbim.io
 
 CHANGELOG
+v1.26.0 - 2026-07-18 - Added an in-canvas color legend for Panel flatness (warp), per user request
+         after a screenshot showing the overlay working well on Taper+Ellipse ("the best example
+         I've seen"). Previously the green->amber->red gradient on the model had no key anywhere in
+         the viewport itself — only a single "max panel warp" number in the sidebar HUD, which
+         doesn't explain what a mid-gradient amber panel actually means. New bottom-left panel
+         (shown only while the Panel flatness toggle is on) shows the same gradient bar with 0 /
+         25(unit) / 50(unit)+ tick labels, using the same illustrative 0-50mm range warpColor()
+         already renders from and the same mm/inch unit conversion (toDisplaySmallLen/smallLenUnit)
+         the HUD row already uses, so the two stay numerically consistent with each other and update
+         together on a Metric/Imperial toggle.
 v1.25.0 - 2026-07-18 - Fixed a real bug user spotted from a screenshot — a large flat green plane
          cutting straight through the Helix Line generator's ramp with Panel flatness (warp) on.
          Root cause: the panel-warp overlay reused floor lines' turns/pitch as its loopCount/stepM
@@ -668,6 +678,27 @@ v1.0.0 - 2026-07-17 - Initial build. Twist operation on four cross-section prese
   #viewControls button:hover{border-color:var(--prussian); color:var(--prussian);}
   #viewControls button:active{background:var(--prussian); color:var(--paper); border-color:var(--prussian);}
 
+  #warpLegend{
+    position:absolute; left:14px; bottom:14px;
+    background:rgba(251,250,246,0.92);
+    border:1px solid var(--line);
+    padding:9px 12px;
+    font-size:0.72rem; line-height:1.4;
+    pointer-events:none;
+    display:none;
+  }
+  #warpLegend.show{display:block;}
+  #warpLegend .warpLegendTitle{color:var(--muted); margin-bottom:5px;}
+  #warpLegend .warpLegendBar{
+    width:150px; height:8px;
+    background:linear-gradient(to right, #2f9e44 0%, #f2c14e 50%, #c0392b 100%);
+    border:1px solid var(--line);
+  }
+  #warpLegend .warpLegendTicks{
+    display:flex; justify-content:space-between;
+    width:150px; margin-top:3px; font-family:'Space Mono', monospace; font-size:0.68rem;
+  }
+
   aside{
     width:300px; flex-shrink:0;
     background:var(--paper);
@@ -841,6 +872,15 @@ v1.0.0 - 2026-07-17 - Initial build. Twist operation on four cross-section prese
       <button id="viewTopBtn" title="Look straight down, plan view">Top</button>
       <button id="viewFrontBtn" title="Look horizontally, elevation view">Front</button>
       <button id="viewHomeBtn" title="Reset to the default framed view">Home</button>
+    </div>
+    <div id="warpLegend">
+      <div class="warpLegendTitle">panel warp (off-planar)</div>
+      <div class="warpLegendBar"></div>
+      <div class="warpLegendTicks mono">
+        <span id="warpLegendLo">0</span>
+        <span id="warpLegendMid">25mm</span>
+        <span id="warpLegendHi">50mm+</span>
+      </div>
     </div>
   </div>
 
@@ -1097,7 +1137,7 @@ v1.0.0 - 2026-07-17 - Initial build. Twist operation on four cross-section prese
 <script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
 <script src="https://cdn.jsdelivr.net/npm/three@0.128.0/examples/js/controls/OrbitControls.js"></script>
 <script>
-const APP_VERSION = '1.25.0';
+const APP_VERSION = '1.26.0';
 
 // ---------- toast ----------
 let toastTimer=null;
@@ -1172,10 +1212,11 @@ const HELP_HTML = `
   <h4>Panel flatness (warp)</h4>
   <p>Every operation except pure extrusion produces panels — the actual floor-to-floor,
   edge-to-edge quads a fabricator would cut — that aren't perfectly flat. This overlay color-codes
-  each real panel from green (flat) through amber to red (warped), and the HUD reports the worst
-  panel's warp in mm/inches: the perpendicular distance of one corner from the plane of the other
-  three, the standard curtain-wall "twist" tolerance measure. The HUD number updates live even with
-  the colored overlay off. The color scale (0–50mm) is illustrative, not a sourced tolerance
+  each real panel from green (flat) through amber to red (warped), with a legend in the
+  bottom-left of the viewport while it's on, and the HUD reports the worst panel's warp in
+  mm/inches: the perpendicular distance of one corner from the plane of the other three, the
+  standard curtain-wall "twist" tolerance measure. The HUD number updates live even with the
+  colored overlay off. The color scale (0–50mm) is illustrative, not a sourced tolerance
   spec — real limits vary by system and manufacturer.</p>
 
   <h4>View navigation</h4>
@@ -2495,7 +2536,18 @@ function rebuild(){
     document.getElementById('hudPanelWarp').textContent =
       toDisplaySmallLen(maxWarpM).toFixed(1) + ' ' + smallLenUnit();
 
+    const warpLegendEl = document.getElementById('warpLegend');
     if(state.overlays.panelwarp){
+      // In-canvas color-scale legend, so the green->amber->red gradient on the model has a key
+      // right next to it instead of only a single "max" number in the sidebar HUD — same 0-50mm
+      // illustrative range warpColor() uses, converted to the active unit system (mm/in), matching
+      // the finer-grained unit toDisplaySmallLen()/smallLenUnit() already use for the HUD row.
+      warpLegendEl.classList.add('show');
+      const u2 = smallLenUnit();
+      document.getElementById('warpLegendLo').textContent = '0';
+      document.getElementById('warpLegendMid').textContent = toDisplaySmallLen(0.025).toFixed(0) + u2;
+      document.getElementById('warpLegendHi').textContent = toDisplaySmallLen(0.05).toFixed(0) + u2 + '+';
+
       const positions = [], colors = [];
       for(const panel of panels){
         const { p00, p01, p10, p11, warpAbsM } = panel;
@@ -2520,6 +2572,8 @@ function rebuild(){
         vertexColors: true, side: THREE.DoubleSide, transparent: true, opacity: 0.62, depthWrite: false
       });
       overlayGroup.add(new THREE.Mesh(warpGeo, warpMat));
+    } else {
+      warpLegendEl.classList.remove('show');
     }
   }
 
