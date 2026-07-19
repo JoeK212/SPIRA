@@ -4,6 +4,21 @@ Interactive explorer of architectural deformation operations — twisting, taper
 Joe.K · axisbim.io
 
 CHANGELOG
+v1.33.0 - 2026-07-18 - Fixed a real bug user reported/screenshotted: "view clipping/culling...
+         need the ability to zoom out further" on a big model (100 floors, 1350ft tall). Root
+         cause: camera.near/camera.far were only ever set once per view-fit (inside Home/Top/Front/
+         the first rebuild), sized for that specific fit distance — OrbitControls itself has no
+         maxDistance set, so scrolling to manually zoom out further is technically unbounded, but
+         doing so eventually exceeds the far plane computed for the ORIGINAL fit distance, and the
+         model gets clipped/culled out of view entirely. That reads exactly like being capped —
+         the camera can still move back, there's just nothing left to see. Fixed by recomputing
+         near/far every frame in animate(), from the camera's actual live distance to the orbit
+         target, using a cached model-radius buffer (lastModelRadius, updated once per rebuild()
+         rather than per frame — a full Box3 traversal is cheap next to everything else rebuild()
+         does, but not something to repeat 60x/second). near/far now always bracket the visible
+         content correctly at any zoom level, in or out, with no artificial ceiling — replacing the
+         previous approach where near/far were only ever correct for whatever distance existed at
+         the moment a view button was last clicked.
 v1.32.0 - 2026-07-18 - Fit-and-finish pass, audited for issues rather than waiting on another
          report. Found and fixed one real gap: the mobile breakpoint (max-width 760px) scales down
          #hud and #viewControls but #warpLegend (added v1.26.0, after that breakpoint already
@@ -1245,7 +1260,7 @@ v1.0.0 - 2026-07-17 - Initial build. Twist operation on four cross-section prese
 <script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
 <script src="https://cdn.jsdelivr.net/npm/three@0.128.0/examples/js/controls/OrbitControls.js"></script>
 <script>
-const APP_VERSION = '1.32.0';
+const APP_VERSION = '1.33.0';
 
 // ---------- toast ----------
 let toastTimer=null;
@@ -2265,6 +2280,14 @@ let currentMesh = null;
 // corner of the new one. Button handlers for those actions now set pendingReframe = true; ordinary
 // slider `input` events do not, so live-dragging a parameter still doesn't disturb the view.
 let pendingReframe = true;
+// v1.33.0: camera near/far were only ever set once per view-fit (Home/Top/Front), sized for that
+// fit's distance — manually scrolling to zoom out further could exceed the far plane and clip the
+// model out of view entirely, which reads exactly like being capped even though OrbitControls has
+// no maxDistance set. animate() below recomputes near/far every frame from the camera's actual
+// live distance, using this cached model radius (updated once per rebuild(), not per frame — a
+// full Box3 traversal is cheap next to everything else rebuild() already does, but not something
+// to repeat 60x/second) as the buffer beyond the current distance.
+let lastModelRadius = 50;
 let lastBuild = null; // {mode, profile, params, h, closed, n} — captured each rebuild() so the
                        // loft-profiles JSON exporter can resample the exact same profile/params via
                        // computeLayerPoint, guaranteed in sync with what's on screen. See
@@ -2957,6 +2980,12 @@ function rebuild(){
     : `${PRESET_LABELS[state.preset]} · ${paramSummary} · ${state.floors} floors · h ${toDisplayLen(h).toFixed(1)}${u.len} · ${state.segments} slices`;
 
   if(pendingReframe){ frameCameraDefault(); pendingReframe = false; }
+
+  // Keep lastModelRadius current every rebuild (not just on an actual reframe) so animate()'s
+  // per-frame near/far always has an up-to-date buffer, even for changes that don't reframe the
+  // camera (e.g. dragging floors or footprint sliders, which deliberately don't disturb the view).
+  const radiusBox = new THREE.Box3().setFromObject(solidGroup);
+  if(!radiusBox.isEmpty()) lastModelRadius = radiusBox.getSize(new THREE.Vector3()).length() / 2;
 }
 
 // ---------- UI wiring ----------
@@ -3941,6 +3970,17 @@ EDITABLE_FIELDS.forEach(bindEditableValue);
 // ---------- render loop ----------
 function animate(){
   requestAnimationFrame(animate);
+  // v1.33.0: near/far used to only ever be set once per view-fit (Home/Top/Front/rebuild), sized
+  // for that fit's own distance — scrolling to manually zoom out further than that could exceed
+  // the far plane and clip the model out of view entirely, which read as "can't zoom out any
+  // further" even though OrbitControls itself has no maxDistance limit; the camera could keep
+  // moving back, the model just vanished. Recomputed every frame from the camera's actual live
+  // distance to the orbit target instead, so near/far always bracket the visible content correctly
+  // at any zoom level, in or out, with no artificial ceiling.
+  const distToTarget = camera.position.distanceTo(controls.target);
+  camera.near = Math.max(distToTarget * 0.005, 0.01);
+  camera.far = distToTarget + Math.max(lastModelRadius * 2, 50);
+  camera.updateProjectionMatrix();
   controls.update();
   renderer.render(scene, camera);
 }

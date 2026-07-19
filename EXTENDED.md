@@ -248,6 +248,19 @@ build" to "any actual reframe-worthy change," after real button-triggered framin
 nearly invisible after switching modes; Bend's base plane filling the viewport) showed the one-shot
 version wasn't enough.
 
+**Near/far clipping planes.** Home/Top/Front each set an initial `camera.near`/`camera.far` sized
+for their own fit distance, but those are no longer the last word — `animate()` recomputes both
+every frame from the camera's actual live distance to `controls.target`, using `lastModelRadius`
+(a Box3-derived radius cached once per `rebuild()`, not recomputed every frame) as a buffer beyond
+that distance. This exists because OrbitControls has no `maxDistance` set — scrolling to manually
+zoom out is technically unbounded — but a *static* far plane sized only for the distance at the
+moment a view button was last clicked would eventually get exceeded by further manual zoom-out,
+clipping the model out of view entirely. That reads exactly like being capped (the camera can
+still move back, there's just nothing left to render), which is what a user report/screenshot on a
+1350ft-tall case study caught (v1.33.0). Recomputing every frame instead of only on a reframe means
+near/far stay correct at any zoom level the user reaches by scrolling, not just the one the last
+Home/Top/Front click happened to compute.
+
 ## Overlay decoration sizing
 
 Point-label size, the axis arrowhead cone, the origin marker, the surface-normals overlay length,
