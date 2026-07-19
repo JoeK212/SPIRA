@@ -4,6 +4,21 @@ Interactive explorer of architectural deformation operations — twisting, taper
 Joe.K · axisbim.io
 
 CHANGELOG
+v1.34.0 - 2026-07-18 - Closed out the last open item from the fit-and-finish list: sliders that
+         change the model's actual size/shape (floors, floor-to-floor height, footprint width/
+         depth, every deformation parameter, every Helix dimension) never triggered a reframe at
+         all, even on a drastic change — only button-triggered actions did (Operation, preset, case
+         study, Reset values, v1.23.0), deliberately, so a live drag never yanks the camera
+         mid-gesture. That was flagged earlier as risky to fix broadly, since the obvious approach
+         (reframe on every 'input' tick) would reintroduce exactly the jump v1.24.0 fixed. The
+         actual fix: listen for 'change' instead of 'input' — it fires once when a slider is
+         released (mouseup) rather than continuously during the drag, so live-dragging is completely
+         unaffected (camera never moves mid-gesture) but letting go of a big change now properly
+         re-fits instead of leaving the model stranded outside the frame with no recovery short of
+         manually clicking Home. Same treatment for the click-to-type editable value fields, via
+         their commit() handler, for typed values — except resolution/segments, which doesn't
+         affect model size and stays reframe-free like the other purely-visual-density sliders
+         (loft profile count, panel subdivision).
 v1.33.0 - 2026-07-18 - Fixed a real bug user reported/screenshotted: "view clipping/culling...
          need the ability to zoom out further" on a big model (100 floors, 1350ft tall). Root
          cause: camera.near/camera.far were only ever set once per view-fit (inside Home/Top/Front/
@@ -1260,7 +1275,7 @@ v1.0.0 - 2026-07-17 - Initial build. Twist operation on four cross-section prese
 <script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
 <script src="https://cdn.jsdelivr.net/npm/three@0.128.0/examples/js/controls/OrbitControls.js"></script>
 <script>
-const APP_VERSION = '1.33.0';
+const APP_VERSION = '1.34.0';
 
 // ---------- toast ----------
 let toastTimer=null;
@@ -2277,8 +2292,12 @@ let currentMesh = null;
 // v1.7.1) but meant switching Operation, cross-section preset, Helix generator, a case study, or
 // Reset values — all of which can change the model's size/shape/position drastically — left the
 // camera wherever it happened to be for the PREVIOUS model, sometimes framing empty space or a tiny
-// corner of the new one. Button handlers for those actions now set pendingReframe = true; ordinary
-// slider `input` events do not, so live-dragging a parameter still doesn't disturb the view.
+// corner of the new one. Button handlers for those actions set pendingReframe = true; ordinary
+// slider `input` events (fired continuously during a drag) still don't, so live-dragging a
+// parameter never yanks the camera mid-gesture. v1.34.0 added one more source: a slider's `change`
+// event (fired once on release, not during the drag) also sets it for every size/shape-affecting
+// slider, so letting go of a big change re-fits instead of stranding the model outside the frame —
+// the live-drag itself is unaffected either way, only what happens once the user lets go.
 let pendingReframe = true;
 // v1.33.0: camera near/far were only ever set once per view-fit (Home/Top/Front), sized for that
 // fit's distance — manually scrolling to zoom out further could exceed the far plane and clip the
@@ -3035,6 +3054,26 @@ loftProfileCountSlider.value = state.loftProfileCount;
 helixTurnsSlider.value = state.helixTurns;
 panelSubdivSlider.value = state.panelSubdiv;
 document.getElementById('panelSubdivVal').textContent = state.panelSubdiv + (state.panelSubdiv===1 ? ' panel' : ' panels');
+
+// v1.34.0: sliders that can change the model's actual size/shape extent (as opposed to purely
+// visual density — resolution, loft profile count, panel subdivision) previously never triggered a
+// reframe at all, even on a huge change (e.g. floors 8 -> 100). Only the button-triggered actions
+// (Operation, preset, case study, Reset values) set pendingReframe (v1.23.0) — deliberately, so a
+// live drag never yanks the camera mid-gesture. But that meant dragging floors, footprint, or any
+// deformation parameter far enough could leave the model stuck outside the frame with no recovery
+// short of manually clicking Home. The 'change' event (fires once when the drag is released, unlike
+// 'input' which fires continuously during it) is the right hook: it preserves the live-drag
+// experience completely — the camera never moves while dragging — but re-fits once the user lets
+// go, so a big change doesn't strand the model off-screen. Same list of fields (length/count/ratio,
+// not resolution) also gets this via bindEditableValue's commit() below, for typed values.
+const SIZE_AFFECTING_SLIDERS = [
+  alphaSlider, taperVSlider, taperWSlider, shearDXSlider, shearDYSlider, bendBetaSlider,
+  floorsSlider, floorHeightSlider, helixTurnsSlider, helixPitchSlider, helixRInnerSlider,
+  helixROuterSlider, helixTubeRSlider, helixTubeOffsetSlider, footprintWidthSlider, footprintDepthSlider
+];
+SIZE_AFFECTING_SLIDERS.forEach(sliderEl=>{
+  sliderEl.addEventListener('change', ()=>{ pendingReframe = true; rebuild(); });
+});
 
 const REFERENCE_TEXT = {
   twist: `Twist keeps a base plane B and a vertical axis A fixed, and rotates every horizontal slice at
@@ -3948,7 +3987,7 @@ function bindEditableValue(cfg){
           ok = true;
         }
       }
-      if(ok){ persist(); rebuild(); }
+      if(ok){ if(cfg.valId !== 'resVal') pendingReframe = true; persist(); rebuild(); }
       syncSliderLabels(); // restores the span's text either way — the committed value if ok, unchanged if not
     }
     input.addEventListener('keydown', e=>{

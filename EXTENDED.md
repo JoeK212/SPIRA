@@ -241,12 +241,23 @@ Runs on the very first `rebuild()` after boot, again whenever Home/Top/Front is 
 whenever `pendingReframe` is true at the start of a `rebuild()` — a flag set by the button handlers
 for Operation, cross-section preset, Helix generator, a case study, and Reset values, all of which
 can change the model's size/shape/position drastically enough that the previous camera position
-would frame empty space or a sliver of the new model. Ordinary slider `input` events do NOT set it,
-so live-dragging a parameter never disturbs mid-session zoom/orbit — the same principle the
-original one-shot `hasFramedOnce` guard was protecting, generalized from "only the very first
-build" to "any actual reframe-worthy change," after real button-triggered framing failures (Helix
-nearly invisible after switching modes; Bend's base plane filling the viewport) showed the one-shot
-version wasn't enough.
+would frame empty space or a sliver of the new model. Ordinary slider `input` events (fired
+continuously during a drag) do NOT set it, so live-dragging a parameter never disturbs mid-session
+zoom/orbit — the same principle the original one-shot `hasFramedOnce` guard was protecting,
+generalized from "only the very first build" to "any actual reframe-worthy change," after real
+button-triggered framing failures (Helix nearly invisible after switching modes; Bend's base plane
+filling the viewport) showed the one-shot version wasn't enough.
+
+v1.34.0 added one more source: every slider that can change the model's actual size or shape
+(floors, floor height, footprint width/depth, every deformation parameter, every Helix dimension —
+everything except resolution, loft profile count, and panel subdivision, which are purely visual
+density controls) also sets `pendingReframe` on its `change` event. `change` fires once when a
+slider is released, unlike `input`, which fires continuously during the drag — so this doesn't
+touch the live-drag experience at all (the camera still never moves while dragging), but a drastic
+change (floors 8 → 100, say) now properly re-fits once the user lets go, instead of leaving the
+model stranded outside the frame with no recovery short of manually clicking Home. The same
+`pendingReframe = true` is set from the click-to-type editable value fields' commit handler too,
+for typed values, with the same resolution exception.
 
 **Near/far clipping planes.** Home/Top/Front each set an initial `camera.near`/`camera.far` sized
 for their own fit distance, but those are no longer the last word — `animate()` recomputes both
