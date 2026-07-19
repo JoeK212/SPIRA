@@ -4,6 +4,19 @@ Interactive explorer of architectural deformation operations — twisting, taper
 Joe.K · axisbim.io
 
 CHANGELOG
+v1.35.0 - 2026-07-18 - Added a "Colorblind-safe palette" toggle for Panel flatness (warp), the last
+         real item on the fit-and-finish list (audit_deploy.js/Dynamo script consistency remains
+         blocked without those files being re-uploaded). Default green->amber->red is exactly the
+         pair deuteranopia/protanopia (the two most common colorblind forms) struggle to
+         distinguish. New alternate palette uses Viridis' own stops (dark purple -> teal -> yellow)
+         — a colormap specifically designed to be both colorblind-safe and perceptually uniform, so
+         severity still reads correctly by brightness alone, not just hue. Toggleable rather than a
+         replacement, since plenty of people prefer the intuitive green-good/red-bad read when it
+         isn't a barrier for them. Shown alongside the subdivision slider, only while Panel flatness
+         is on; the in-canvas legend's gradient bar switches to match via a CSS class rather than a
+         second hardcoded gradient, verified the interpolation hits the exact stop colors at
+         t=0/0.5/1 before shipping. warpColor()'s two-stop lerp logic factored into a shared
+         lerpPaletteStops() helper so both palettes go through identical interpolation math.
 v1.34.0 - 2026-07-18 - Closed out the last open item from the fit-and-finish list: sliders that
          change the model's actual size/shape (floors, floor-to-floor height, footprint width/
          depth, every deformation parameter, every Helix dimension) never triggered a reframe at
@@ -812,6 +825,9 @@ v1.0.0 - 2026-07-17 - Initial build. Twist operation on four cross-section prese
     background:linear-gradient(to right, #2f9e44 0%, #f2c14e 50%, #c0392b 100%);
     border:1px solid var(--line);
   }
+  #warpLegend .warpLegendBar.colorblind{
+    background:linear-gradient(to right, #440154 0%, #21908c 50%, #fde725 100%);
+  }
   #warpLegend .warpLegendMarker{
     position:absolute; top:-3px; bottom:-3px; width:2px;
     background:var(--ink); transform:translateX(-50%);
@@ -1007,7 +1023,7 @@ v1.0.0 - 2026-07-17 - Initial build. Twist operation on four cross-section prese
     </div>
     <div id="warpLegend">
       <div class="warpLegendTitle">panel warp (off-planar)</div>
-      <div class="warpLegendBar"><div class="warpLegendMarker" id="warpLegendMarker"></div></div>
+      <div class="warpLegendBar" id="warpLegendBar"><div class="warpLegendMarker" id="warpLegendMarker"></div></div>
       <div class="warpLegendTicks mono">
         <span id="warpLegendLo">0</span>
         <span id="warpLegendMid">25mm</span>
@@ -1225,6 +1241,10 @@ v1.0.0 - 2026-07-17 - Initial build. Twist operation on four cross-section prese
         <input type="range" id="panelSubdivSlider" min="1" max="12" step="1" value="1">
         <div style="font-size:0.72rem; color:var(--muted); margin-top:2px;" id="panelSubdivNote"></div>
       </div>
+      <div class="toggle-row" id="colorblindPaletteRow" style="display:none;">
+        <span>Colorblind-safe palette</span>
+        <div class="switch" data-toggle="colorblindPalette"></div>
+      </div>
     </section>
 
     <section class="group">
@@ -1275,7 +1295,7 @@ v1.0.0 - 2026-07-17 - Initial build. Twist operation on four cross-section prese
 <script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
 <script src="https://cdn.jsdelivr.net/npm/three@0.128.0/examples/js/controls/OrbitControls.js"></script>
 <script>
-const APP_VERSION = '1.34.0';
+const APP_VERSION = '1.35.0';
 
 // ---------- toast ----------
 let toastTimer=null;
@@ -1359,8 +1379,11 @@ const HELP_HTML = `
   "subdivide each face into N panels" slider appears alongside the toggle — by default each real
   building face is measured as one single panel, which can produce a large warp figure on a wide
   face; subdividing shows how a real curtain wall would actually reduce that by breaking each face
-  into narrower bays, with a live readout of the resulting panel width. The color scale (0–50mm)
-  is illustrative, not a sourced tolerance spec — real limits vary by system and manufacturer.</p>
+  into narrower bays, with a live readout of the resulting panel width. A "Colorblind-safe palette"
+  toggle switches the gradient from green/amber/red to Viridis' purple/teal/yellow, which reads
+  correctly by brightness alone and doesn't rely on distinguishing red from green. The color scale
+  (0–50mm) is illustrative, not a sourced tolerance spec — real limits vary by system and
+  manufacturer.</p>
 
   <h4>View navigation</h4>
   <p>Drag to orbit, scroll to zoom, right-drag (or two-finger drag) to pan. <strong>Top</strong>,
@@ -1444,7 +1467,7 @@ const state = {
   panelSubdiv: 1, // v1.28.0: how many narrower bays to split each real face/edge into before
                    // measuring panel warp — 1 reproduces the original behavior (one panel spanning
                    // the whole named-corner-to-named-corner edge). See computePanelWarp's caller.
-  overlays: { axis:true, plane:true, rulings:true, slicerings:true, floorlines:true, wireframe:false, labels:false, normals:false, panelwarp:false }
+  overlays: { axis:true, plane:true, rulings:true, slicerings:true, floorlines:true, wireframe:false, labels:false, normals:false, panelwarp:false, colorblindPalette:false }
 };
 
 try{
@@ -2009,17 +2032,30 @@ function computePanelWarp(profile, layerPointFn, n, closed, loopCount, stepM){
   }
   return { panels, maxWarpM, avgWarpM: panels.length ? sumWarpM/panels.length : 0 };
 }
-// Green -> amber -> red over an illustrative 0-50mm range (same "illustrative, not a sourced
-// tolerance spec" framing used for the case-study footprint estimates) — real curtain-wall twist
-// tolerances vary by system and manufacturer, this is a teaching-scale gradient, not a code value.
-function warpColor(warpAbsM){
-  const mm = warpAbsM * 1000;
-  const t = Math.max(0, Math.min(mm/50, 1));
-  const green = [0x2f,0x9e,0x44], amber = [0xf2,0xc1,0x4e], red = [0xc0,0x39,0x2b];
-  const [a,b] = t < 0.5 ? [green,amber] : [amber,red];
+// Two palettes over the same illustrative 0-50mm range (real curtain-wall twist tolerances vary by
+// system and manufacturer — this is a teaching-scale gradient, not a code value). Default is
+// green -> amber -> red, the conventional low/mid/high severity read, but red-green is exactly the
+// pair most colorblind users (deuteranopia/protanopia, the two most common forms) struggle to tell
+// apart — v1.35.0 added a second palette using Viridis' own stops (dark purple -> teal -> yellow),
+// a colormap specifically designed to be both colorblind-safe and perceptually uniform (each step
+// reads as evenly more severe by brightness alone, not just hue), toggleable alongside Panel
+// flatness rather than replacing the default, since plenty of people prefer the intuitive
+// green-good/red-bad read when it isn't a barrier for them.
+const WARP_PALETTES = {
+  default: [[0x2f,0x9e,0x44], [0xf2,0xc1,0x4e], [0xc0,0x39,0x2b]], // green, amber, red
+  colorblind: [[0x44,0x01,0x54], [0x21,0x90,0x8c], [0xfd,0xe7,0x25]] // Viridis: purple, teal, yellow
+};
+function lerpPaletteStops(stops, t){
+  const [a,b] = t < 0.5 ? [stops[0],stops[1]] : [stops[1],stops[2]];
   const localT = t < 0.5 ? t/0.5 : (t-0.5)/0.5;
   const r = a[0]+(b[0]-a[0])*localT, g = a[1]+(b[1]-a[1])*localT, bch = a[2]+(b[2]-a[2])*localT;
   return [r/255, g/255, bch/255];
+}
+function warpColor(warpAbsM){
+  const mm = warpAbsM * 1000;
+  const t = Math.max(0, Math.min(mm/50, 1));
+  const stops = state.overlays.colorblindPalette ? WARP_PALETTES.colorblind : WARP_PALETTES.default;
+  return lerpPaletteStops(stops, t);
 }
 
 function buildDeformedGeometry(profile, height, segs, mode, params, smoothCrossSection){
@@ -2795,6 +2831,7 @@ function rebuild(){
       // illustrative range warpColor() uses, converted to the active unit system (mm/in), matching
       // the finer-grained unit toDisplaySmallLen()/smallLenUnit() already use for the HUD row.
       warpLegendEl.classList.add('show');
+      document.getElementById('warpLegendBar').classList.toggle('colorblind', state.overlays.colorblindPalette);
       const u2 = smallLenUnit();
       document.getElementById('warpLegendLo').textContent = '0';
       document.getElementById('warpLegendMid').textContent = toDisplaySmallLen(0.025).toFixed(0) + u2;
@@ -3399,10 +3436,12 @@ document.querySelectorAll('.switch').forEach(sw=>{
 // v1.30.0: Panel flatness (v1.27.0) hides the solid itself while it's on, so the Wireframe toggle
 // has nothing left to wireframe and silently does nothing — dimming it (rather than leaving a
 // switch that flips with no visible effect) tells the user why, instead of leaving them to wonder
-// if it's broken. Same panelwarp-dependent-UI update also covers the subdivision slider (v1.28.0).
+// if it's broken. Same panelwarp-dependent-UI update also covers the subdivision slider (v1.28.0)
+// and the colorblind-safe palette toggle (v1.35.0), both only meaningful while Panel flatness is on.
 function syncPanelwarpDependentUI(){
   document.getElementById('panelSubdivBlock').style.display = state.overlays.panelwarp ? '' : 'none';
   document.getElementById('wireframeRow').classList.toggle('disabled', state.overlays.panelwarp);
+  document.getElementById('colorblindPaletteRow').style.display = state.overlays.panelwarp ? '' : 'none';
 }
 syncPanelwarpDependentUI();
 

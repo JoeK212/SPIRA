@@ -91,7 +91,10 @@ By default each named corner-to-corner edge is measured as a single panel, which
 large number on a wide building face — a "subdivide each face into N panels" slider (1–12, shown
 alongside the toggle) shows how a real curtain wall would actually reduce that by breaking each
 face into narrower bays, since warp scales roughly linearly with panel width for a given rotation
-rate; a live readout shows the resulting real-world panel width for whatever N is chosen.
+rate; a live readout shows the resulting real-world panel width for whatever N is chosen. A
+"Colorblind-safe palette" toggle switches the green/amber/red gradient to Viridis' purple/teal/
+yellow stops, which read correctly by brightness alone rather than relying on distinguishing red
+from green.
 
 Comparing Twist against Bend with this overlay on is a good demonstration: Bend's panels come out
 exactly flat at any angle, since it only sweeps the cross-section along an arc without ever
