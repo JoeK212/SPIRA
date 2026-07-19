@@ -4,6 +4,17 @@ Interactive explorer of architectural deformation operations — twisting, taper
 Joe.K · axisbim.io
 
 CHANGELOG
+v1.24.0 - 2026-07-18 - Fixed a real bug reported as "toggle Panel flatness off, canvas frame jumps" —
+         the toggle was incidental, not the cause. rebuild() (which runs on every slider tick and
+         every overlay checkbox, not just Panel flatness) was unconditionally calling
+         controls.target.set(0, h/2, 0) at its end, every single time. OrbitControls.update() runs
+         every animation frame regardless of what triggered it, so that reset silently snapped any
+         panning the user had done back to dead-center on the very next frame after ANY interaction
+         — the jump was just most noticeable on a toggle click, which doesn't otherwise touch the
+         model. Removed the unconditional reset; frameCameraDefault() already sets controls.target
+         correctly (to the actual fitted box center) and only runs when pendingReframe is true
+         (v1.23.0), so it alone owns the target now — consistent with camera position/distance,
+         which likewise only move on an actual reframe, never a plain slider drag or toggle.
 v1.23.0 - 2026-07-18 - Fixed two real, user-reported readability bugs, both worst at real-building
          case-study scale. (1) Camera framing: frameCameraDefault() only ever auto-fit once, on the
          very first rebuild() (hasFramedOnce), by design (v1.7.1) so mid-session slider drags never
@@ -1068,7 +1079,7 @@ v1.0.0 - 2026-07-17 - Initial build. Twist operation on four cross-section prese
 <script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
 <script src="https://cdn.jsdelivr.net/npm/three@0.128.0/examples/js/controls/OrbitControls.js"></script>
 <script>
-const APP_VERSION = '1.23.0';
+const APP_VERSION = '1.24.0';
 
 // ---------- toast ----------
 let toastTimer=null;
@@ -2604,7 +2615,16 @@ function rebuild(){
     }
   }
 
-  controls.target.set(0, h/2, 0);
+  // v1.24.0: this used to unconditionally call controls.target.set(0, h/2, 0) here on every single
+  // rebuild() — every slider tick, every overlay checkbox — which silently snapped any panning the
+  // user had done back to dead-center, since OrbitControls.update() runs every animation frame
+  // regardless (see animate() below) and picks up the new target on the very next frame. Reported
+  // as "canvas frame jumps/shift" after toggling Panel flatness off, but the toggle itself was
+  // incidental — ANY rebuild-triggering interaction after panning would have caused the same jump.
+  // frameCameraDefault() already sets controls.target correctly (to the actual box center) and only
+  // runs when pendingReframe is true, so it alone is responsible for target now — consistent with
+  // camera position/distance, which likewise only move on an actual reframe, never on a plain
+  // slider drag or toggle.
   const paramSummary = state.mode === 'taper'
     ? `Taper v${state.taperV.toFixed(2)} w${state.taperW.toFixed(2)}`
     : state.mode === 'shear'
