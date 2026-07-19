@@ -4,6 +4,37 @@ Interactive explorer of architectural deformation operations — twisting, taper
 Joe.K · axisbim.io
 
 CHANGELOG
+v1.23.0 - 2026-07-18 - Fixed two real, user-reported readability bugs, both worst at real-building
+         case-study scale. (1) Camera framing: frameCameraDefault() only ever auto-fit once, on the
+         very first rebuild() (hasFramedOnce), by design (v1.7.1) so mid-session slider drags never
+         yank the view — but that same guard meant switching Operation, cross-section preset, Helix
+         generator, a case study, or Reset values (all of which can change the model's size/shape/
+         position drastically) left the camera fit to whatever the PREVIOUS model was, sometimes
+         framing empty space or a sliver of the new one (screenshots: Helix nearly invisible after
+         switching from Taper; Bend's base plane filling the whole viewport with the actual solid
+         tiny in a corner). Replaced the one-shot boolean with a pendingReframe flag that those
+         specific button handlers set — ordinary slider `input` events still don't, so live-dragging
+         a parameter is unaffected. (2) Overlay decorations (point labels, axis arrowhead cone,
+         origin marker, surface-normals overlay, base plane B, FFD handles) were all sized/scaled
+         off total model height h alone. Fine for a roughly cube-proportioned model, but wrong two
+         different ways for a tall/narrow real building like The Shard (309.6m tall, ~28m footprint):
+         label sprites scaled to h ballooned to ~12.5m wide against a 28m-wide base — readable in
+         isolation, but the point-labels loop ALSO picked its sample points by raw array index
+         (first min(n,10)), which is every real corner on a low-vertex polygon (square/triangle/
+         hexagon/octagon/star, all n<=10) but only a tightly-clustered ~90 degree arc on a smooth
+         32-point Ellipse or 24-point Helix Circle/Pipe generator — so oversized labels landed
+         directly on top of each other by construction, independent of size. Fixed both: labels now
+         sample evenly around the loop (stride = n/numLabels, a no-op for n<=10 polygons), and every
+         decoration's size now derives from a new footprintExtent value (the (x,z) bounding extent
+         of the model's own BASE ring only, computed once per rebuild and reused everywhere) instead
+         of h. That same footprintExtent fix also corrected base plane B, which had the same root
+         bug one level up: v1.21.0 sized it from the planar bounding extent of EVERY layer (correct
+         for Twist/Taper, which stay above their own footprint, but wrong for Bend, whose solid
+         sweeps sideways through world space as it curves — the "base plane" was measuring the whole
+         curved solid's footprint, not the actual base cross-section, which is exactly the huge
+         diamond in the Bend screenshot). Verified visually against all four reported screenshots
+         (Taper+Ellipse label mass, Helix invisible-after-switch, Shear+Ellipse label mass, Bend
+         oversized base plane) before shipping.
 v1.22.0 - 2026-07-18 - Added a "Panel flatness (warp)" overlay, following up on the panel-planarity
          topic raised at the end of the last session (every SPIRA operation except pure extrusion
          produces non-planar floor-to-floor panels in general — a real curtain-wall/cladding
@@ -1037,7 +1068,7 @@ v1.0.0 - 2026-07-17 - Initial build. Twist operation on four cross-section prese
 <script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
 <script src="https://cdn.jsdelivr.net/npm/three@0.128.0/examples/js/controls/OrbitControls.js"></script>
 <script>
-const APP_VERSION = '1.22.0';
+const APP_VERSION = '1.23.0';
 
 // ---------- toast ----------
 let toastTimer=null;
@@ -1974,9 +2005,14 @@ function buildHelicalGeometry(genPts, closed, uSegs, height, params, evalPoint){
 }
 
 let currentMesh = null;
-let hasFramedOnce = false; // camera auto-fits to the model's actual bounding box once, on the
-                            // first rebuild() — see frameCameraDefault(). After that, mid-session
-                            // zoom/orbit is left alone (v1.7.1 decision), same as before.
+// v1.23.0: was a one-shot hasFramedOnce boolean — camera only ever auto-fit on the very first
+// rebuild(), which was fine for continuous slider drags within one mode (deliberately left alone,
+// v1.7.1) but meant switching Operation, cross-section preset, Helix generator, a case study, or
+// Reset values — all of which can change the model's size/shape/position drastically — left the
+// camera wherever it happened to be for the PREVIOUS model, sometimes framing empty space or a tiny
+// corner of the new one. Button handlers for those actions now set pendingReframe = true; ordinary
+// slider `input` events do not, so live-dragging a parameter still doesn't disturb the view.
+let pendingReframe = true;
 let lastBuild = null; // {mode, profile, params, h, closed, n} — captured each rebuild() so the
                        // loft-profiles JSON exporter can resample the exact same profile/params via
                        // computeLayerPoint, guaranteed in sync with what's on screen. See
@@ -2074,6 +2110,29 @@ function rebuild(){
   }
 
   lastBuild = { mode: state.mode, profile, params, h, closed, n, evalPoint: layerPointFn };
+
+  // v1.23.0: a single "how big is the footprint, really" reference, computed from ONLY the first
+  // (base) ring of layerPositions rather than the whole solid. Two bugs traced back to using the
+  // wrong source for this: (1) Base plane B was sized from the planar (x,z) bounding extent of
+  // EVERY layer, so for any mode that curves through world space (Bend especially, whose solid
+  // sweeps across a wide arc) the "base plane" ballooned to the size of the whole curved solid's
+  // footprint rather than the actual base cross-section — a plane many times larger than the
+  // building it was supposed to sit under. (2) Point-label size, the axis arrowhead cone, the
+  // surface-normals overlay length, and FFD handle radius all scaled with total height h alone —
+  // reasonable for a roughly cube-proportioned model, but for a tall/narrow real-building case study
+  // (The Shard: 309.6m tall, ~28m footprint) that let h-proportional sizes balloon to a scale that
+  // dwarfed the actual footprint they were meant to mark, e.g. 10 profile-point labels each ~14m
+  // wide arranged around a 28m-wide base — guaranteed overlap into an unreadable mass regardless of
+  // camera framing. footprintExtent fixes both: it's mode-agnostic (works identically for Helix,
+  // where there's no `box`, and every other mode, where `box` already holds the true undeformed
+  // cross-section bounds) since it's read directly off the first ring of what was actually built.
+  let footMinX=Infinity, footMaxX=-Infinity, footMinZ=Infinity, footMaxZ=-Infinity;
+  for(let idx=0; idx<n*3; idx+=3){
+    const px = layerPositions[idx], pz = layerPositions[idx+2];
+    if(px<footMinX) footMinX=px; if(px>footMaxX) footMaxX=px;
+    if(pz<footMinZ) footMinZ=pz; if(pz>footMaxZ) footMaxZ=pz;
+  }
+  const footprintExtent = Math.max(footMaxX-footMinX, footMaxZ-footMinZ, 0.1);
 
   // v1.14.2 replaced flat shading (each triangle its own face normal) with analytic per-vertex
   // normals for twist/taper/shear/bend/ffd — computed directly from the deformation's own tangent
@@ -2195,9 +2254,13 @@ function rebuild(){
     // also long in absolute terms. Trimmed to a more restrained 15% overshoot.
     const axisTop = h * 1.15;
     // Arrowhead cone size was a hardcoded (0.09, 0.3) regardless of model scale — invisible on a
-    // 300m-tall case study, disproportionately large on a small classroom-scale model. Same
-    // Math.max(proportional, floor) pattern as the origin marker/FFD handles/normals overlay below.
-    const coneR = Math.max(h*0.012, 0.06), coneH = coneR * 3.3;
+    // 300m-tall case study, disproportionately large on a small classroom-scale model. v1.21.0 fixed
+    // that by scaling with h, but that overcorrected for tall/narrow buildings (The Shard: 309.6m
+    // tall on a ~28m footprint) — a cone sized off total height alone ballooned into a shape bigger
+    // than the building was wide, reading as a giant floating teardrop rather than a small arrowhead.
+    // v1.23.0: scales with footprintExtent instead, since an arrowhead's job is to read as a small
+    // marker against the building's own width, not its height.
+    const coneR = Math.max(footprintExtent*0.03, 0.06), coneH = coneR * 3.3;
     if(state.mode === 'shear' || state.mode === 'bend'){
       const aGeo = new THREE.BufferGeometry().setFromPoints([
         new THREE.Vector3(0,0,0), new THREE.Vector3(0, axisTop, 0)
@@ -2250,30 +2313,28 @@ function rebuild(){
   // itself since FFD has no axis of its own — a fixed anchor point is still useful there).
   if(state.overlays.axis){
     const originMarker = new THREE.Mesh(
-      new THREE.SphereGeometry(Math.max(h*0.015, 0.06), 12, 8),
+      new THREE.SphereGeometry(Math.max(footprintExtent*0.02, 0.06), 12, 8),
       new THREE.MeshBasicMaterial({ color: 0x1a1a18 })
     );
     originMarker.position.set(0, 0, 0);
     overlayGroup.add(originMarker);
     const originLabel = spriteLabel('0,0,0', '#1a1a18');
-    originLabel.position.set(h*0.05+0.3, h*0.03+0.1, h*0.05+0.3);
+    const originOffset = footprintExtent*0.04+0.1;
+    originLabel.position.set(originOffset, originOffset*0.6+0.1, originOffset);
     overlayGroup.add(originLabel);
   }
 
   // base plane B — size was a hardcoded 4.2 regardless of the actual model, so it rendered far
   // smaller than the solid itself on any real-building-scale case study (Cayan Tower's footprint
-  // alone is ~22m). Now derived from the model's own planar (x,z) bounding extent, computed
-  // generically from layerPositions rather than per-mode logic, so it's correct for every preset
-  // and every Helix generator without needing to special-case any of them.
+  // alone is ~22m). v1.21.0 fixed that by deriving it from the (x,z) bounding extent of every
+  // layerPositions point — correct for a mode that stays roughly above its own footprint (Twist,
+  // Taper), but wrong for one that sweeps sideways through world space as it rises (Bend especially:
+  // the whole curved solid's footprint was being measured, not the base cross-section, so the "base
+  // plane" could balloon to many times the size of the building actually sitting on it). v1.23.0:
+  // reuses footprintExtent (first ring only, computed once above) instead, so this is now the true
+  // base cross-section size for every mode, Helix included, with no per-mode special-casing.
   if(state.overlays.plane){
-    let minX=Infinity, maxX=-Infinity, minZ=Infinity, maxZ=-Infinity;
-    for(let idx=0; idx<layerPositions.length; idx+=3){
-      const px = layerPositions[idx], pz = layerPositions[idx+2];
-      if(px<minX) minX=px; if(px>maxX) maxX=px;
-      if(pz<minZ) minZ=pz; if(pz>maxZ) maxZ=pz;
-    }
-    const planarExtent = Math.max(maxX-minX, maxZ-minZ, 0.1);
-    const size = Math.max(planarExtent * 1.6, 3);
+    const size = Math.max(footprintExtent * 1.6, 3);
     const planeGeo = new THREE.PlaneGeometry(size, size);
     const planeMat = new THREE.MeshBasicMaterial({ color:0xc8932a, transparent:true, opacity:0.14, side:THREE.DoubleSide });
     const planeMesh = new THREE.Mesh(planeGeo, planeMat);
@@ -2293,16 +2354,29 @@ function rebuild(){
   // approximation only held for the ordinary radial-sweep helix formula (line/circle) and would have
   // placed Pipe's labels using its unrelated (angle, unused) generator coordinates.
   if(state.overlays.labels){
-    // Fixed 0.9x0.45 (world units) read too small once the solid itself is building-scale (tens of
-    // meters/feet tall) — sizeMult scales the sprite with the model, same Math.max(proportional,
-    // floor) pattern used elsewhere (origin marker, FFD handles) so labels stay legible at both
-    // small and large heights instead of a single constant that only looked right at one scale.
-    const labelSizeMult = Math.max(h*0.045, 1.4);
+    // Two bugs here, both visible together as an unreadable red/black mass on any tall/narrow
+    // real-building case study with a many-point smooth cross-section (e.g. The Shard + Ellipse):
+    // (1) this used to take the first min(n,10) points BY ARRAY INDEX. That's every real corner for
+    // the low-vertex polygons (square=4, triangle=3, hexagon=6, octagon=8, star=10), but Ellipse
+    // (n=32) and Helix's Circle/Pipe generators (n=24) are densely-sampled smooth loops with no real
+    // corners — their first 10 points are a tightly-clustered ~90° arc, not 10 points spread around
+    // the shape, so labels landed on top of each other by construction regardless of size. Now
+    // samples evenly around the loop (stride = n/numLabels) instead, which is a no-op for the
+    // low-vertex polygons (n <= 10, stride 1, identical output) and fixes the smooth-loop case.
+    // (2) size scaled with total height h alone (v1.14.2), reasonable for a roughly cube-proportioned
+    // model but not for a tall/narrow one (The Shard: 309.6m tall, ~28m footprint) — h-proportional
+    // labels ballooned past the footprint they were arranged around. Now scales with the footprint
+    // extent divided by how many labels actually have to fit around it, so it tracks real available
+    // spacing instead of a dimension (height) that has nothing to do with label spacing.
+    const numLabels = Math.min(n, 10);
+    const labelStride = Math.max(1, Math.floor(n/numLabels));
+    const labelSizeMult = Math.max(Math.min(footprintExtent/numLabels*0.5, footprintExtent*0.12), 0.5);
     const names = ['a','b','c','d','e','f','g','h','i','j'];
-    for(let i=0;i<Math.min(n, names.length); i++){
+    for(let k=0;k<numLabels;k++){
+      const i = (k*labelStride) % n;
       const bp = profile[i];
       const [bx,byOut,bz] = layerPointFn(0, bp);
-      const bLabel = spriteLabel(names[i], '#1a1a18', labelSizeMult);
+      const bLabel = spriteLabel(names[k], '#1a1a18', labelSizeMult);
       if(state.mode === 'helix'){
         // Multiplicative outward nudge breaks down right on the axis (0 * anything is still 0) —
         // e.g. Line's inner point at rInner=0, or any generator point that lands at x=z=0 at u=0 —
@@ -2315,7 +2389,7 @@ function rebuild(){
       overlayGroup.add(bLabel);
 
       const [tx,tyOut,tz] = layerPointFn(h, bp);
-      const tLabel = spriteLabel(names[i]+'₁', '#b23a2e', labelSizeMult);
+      const tLabel = spriteLabel(names[k]+'₁', '#b23a2e', labelSizeMult);
       tLabel.position.set(tx*1.12, tyOut+0.25, tz*1.12);
       overlayGroup.add(tLabel);
     }
@@ -2333,7 +2407,10 @@ function rebuild(){
   // others, not just technically distinct.
   if(state.overlays.normals){
     const normalMat = new THREE.LineBasicMaterial({ color: 0x6a3d9a });
-    const normalLen = Math.max(h*0.03, 0.4);
+    // Was h*0.03 — same tall/narrow problem as the label sprites and axis cone: scaled with total
+    // height regardless of footprint, so normals ballooned past the building's own width on a case
+    // study like The Shard. footprintExtent-relative instead.
+    const normalLen = Math.max(footprintExtent*0.075, 0.4);
     const loopCount = state.mode === 'helix' ? state.helixTurns : state.floors;
     const stepM = state.mode === 'helix' ? state.helixPitchM : state.floorHeightM;
     const dY = Math.max(h/200, 1e-4);
@@ -2411,7 +2488,9 @@ function rebuild(){
   // the interaction, not an optional decoration like the other overlays.
   ffdHandleMeshes = [];
   if(state.mode === 'ffd'){
-    const handleR = Math.max(h*0.02, 0.15);
+    // Same footprintExtent-relative treatment as the axis cone/labels/normals above, for the same
+    // reason — a handle sized off total height alone would over/undershoot on a tall, narrow box.
+    const handleR = Math.max(footprintExtent*0.05, 0.15);
     const cageMat = new THREE.LineBasicMaterial({ color: 0x9c3226, transparent:true, opacity:0.55 });
     const cagePts = [];
     // 12 edges of the control cuboid, connecting adjacent corners (differ in exactly one index)
@@ -2542,7 +2621,7 @@ function rebuild(){
     ? `${helixGenFooterLabel} · ${paramSummary} · ${state.helixTurns} turns · h ${toDisplayLen(h).toFixed(1)}${u.len} · ${segs} segments`
     : `${PRESET_LABELS[state.preset]} · ${paramSummary} · ${state.floors} floors · h ${toDisplayLen(h).toFixed(1)}${u.len} · ${state.segments} slices`;
 
-  if(!hasFramedOnce){ frameCameraDefault(); hasFramedOnce = true; }
+  if(pendingReframe){ frameCameraDefault(); pendingReframe = false; }
 }
 
 // ---------- UI wiring ----------
@@ -2556,6 +2635,7 @@ Object.keys(PROFILES).forEach(key=>{
     state.preset = key;
     [...presetGrid.children].forEach(c=>c.classList.remove('active'));
     btn.classList.add('active');
+    pendingReframe = true;
     persist(); rebuild();
     toast(PRESET_LABELS[key] + ' profile loaded');
   });
@@ -2681,6 +2761,7 @@ function applyModeChrome(){
   btn.addEventListener('click', ()=>{
     state.mode = btn.dataset.mode;
     applyModeChrome();
+    pendingReframe = true;
     persist(); rebuild();
     toast(MODE_LABEL[state.mode] + ' mode');
   });
@@ -2692,6 +2773,7 @@ const helixGenGrid = document.getElementById('helixGenGrid');
   btn.addEventListener('click', ()=>{
     state.helixGenerator = btn.dataset.helixgen;
     applyModeChrome();
+    pendingReframe = true;
     persist(); rebuild();
     const genLabel = { line:'Line', circle:'Circle', pipe:'Pipe' }[state.helixGenerator];
     toast(genLabel + ' generator');
@@ -2943,7 +3025,7 @@ function resetModeValues(mode){
   syncShearSliderRange();
   syncHelixSliderRanges();
   applyModeChrome(); // in case helixGenerator changed, so the Line/Circle sub-toggle display follows
-  syncSliderLabels(); persist(); rebuild();
+  syncSliderLabels(); pendingReframe = true; persist(); rebuild();
   toast((mode === 'ffd' ? 'Control points' : MODE_LABEL[mode] + ' values') + ' reset');
 }
 document.querySelectorAll('.reset-btn').forEach(btn=>{
@@ -3019,7 +3101,7 @@ function loadCaseStudy(key){
   syncFootprintSliderRange();
   syncShearSliderRange();
   applyModeChrome();
-  syncSliderLabels(); persist(); rebuild();
+  syncSliderLabels(); pendingReframe = true; persist(); rebuild();
   toast(cs.toast);
 }
 document.querySelectorAll('[data-casestudy]').forEach(btn=>{
