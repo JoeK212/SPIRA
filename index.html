@@ -4,6 +4,16 @@ Interactive explorer of architectural deformation operations — twisting, taper
 Joe.K · axisbim.io
 
 CHANGELOG
+v1.29.0 - 2026-07-18 - User reported the panel boundaries were faint/unreadable after using the new
+         "subdivide each face into N panels" slider (v1.28.0) — checked the sidebar label's CSS
+         first (identical markup/classes to every other slider-row label, ruled out as the cause),
+         so this is about the 3D view: with a face split into several bays, neighboring panels often
+         land at similar-enough warp values to get near-identical fill colors, and since the overlay
+         only ever drew filled color, not boundaries, a subdivided face read as one undifferentiated
+         wash rather than N distinct panels. Added a dark outline (LineSegments, 4 edges per panel)
+         around every panel-warp quad, nudged slightly further out than the fill (0.045 vs 0.03) so
+         it never z-fights with its own panel underneath — panel boundaries now stay clearly visible
+         regardless of how similar two neighboring panels' colors happen to be.
 v1.28.0 - 2026-07-18 - Added a "subdivide each face into N panels" slider (1-12, shown under Panel
          flatness while that overlay is on) after the user asked whether Turning Torso's 26.2in max
          panel warp figure meant the case study's dimensions were wrong. They weren't — 90 degrees
@@ -1171,7 +1181,7 @@ v1.0.0 - 2026-07-17 - Initial build. Twist operation on four cross-section prese
 <script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
 <script src="https://cdn.jsdelivr.net/npm/three@0.128.0/examples/js/controls/OrbitControls.js"></script>
 <script>
-const APP_VERSION = '1.28.0';
+const APP_VERSION = '1.29.0';
 
 // ---------- toast ----------
 let toastTimer=null;
@@ -2645,7 +2655,7 @@ function rebuild(){
       document.getElementById('warpLegendMid').textContent = toDisplaySmallLen(0.025).toFixed(0) + u2;
       document.getElementById('warpLegendHi').textContent = toDisplaySmallLen(0.05).toFixed(0) + u2 + '+';
 
-      const positions = [], colors = [];
+      const positions = [], colors = [], outlinePositions = [];
       for(const panel of panels){
         const { p00, p01, p10, p11, warpAbsM } = panel;
         // Nudge every corner outward from the panel's own centroid, same technique slice rings
@@ -2661,6 +2671,14 @@ function rebuild(){
         // the material is double-sided and unlit (color-coding, not shading, carries the meaning).
         positions.push(...q00, ...q01, ...q11, ...q00, ...q11, ...q10);
         for(let v=0; v<6; v++) colors.push(...col);
+        // v1.29.0: user reported the panel boundaries were hard to read — with subdivideProfileForPanels
+        // splitting a face into several bays, two neighboring panels often land at similar-enough warp
+        // values to get near-identical fill colors, so without an explicit boundary the whole face read
+        // as one undifferentiated wash of color instead of N distinct panels. Nudged slightly further out
+        // than the fill itself (0.045 vs 0.03) so the outline never z-fights with its own panel fill.
+        const outerNudge = (p) => [ p[0]+(p[0]-cx)*0.045, p[1]+(p[1]-cy)*0.045, p[2]+(p[2]-cz)*0.045 ];
+        const o00 = outerNudge(p00), o01 = outerNudge(p01), o10 = outerNudge(p10), o11 = outerNudge(p11);
+        outlinePositions.push(...o00,...o01, ...o01,...o11, ...o11,...o10, ...o10,...o00);
       }
       const warpGeo = new THREE.BufferGeometry();
       warpGeo.setAttribute('position', new THREE.Float32BufferAttribute(positions, 3));
@@ -2669,6 +2687,11 @@ function rebuild(){
         vertexColors: true, side: THREE.DoubleSide, transparent: true, opacity: 0.62, depthWrite: false
       });
       overlayGroup.add(new THREE.Mesh(warpGeo, warpMat));
+
+      const outlineGeo = new THREE.BufferGeometry();
+      outlineGeo.setAttribute('position', new THREE.Float32BufferAttribute(outlinePositions, 3));
+      const outlineMat = new THREE.LineBasicMaterial({ color: 0x1a1a18, transparent: true, opacity: 0.55 });
+      overlayGroup.add(new THREE.LineSegments(outlineGeo, outlineMat));
     } else {
       warpLegendEl.classList.remove('show');
     }
