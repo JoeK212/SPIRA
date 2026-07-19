@@ -4,6 +4,22 @@ Interactive explorer of architectural deformation operations — twisting, taper
 Joe.K · axisbim.io
 
 CHANGELOG
+v1.30.0 - 2026-07-18 - Fit-and-finish pass, three items. (1) The Panel flatness legend's gradient
+         clamps at 50mm — every panel past that renders identically red, so a model at 51mm and one
+         at 200mm looked the same. Added a marker on the gradient bar at the actual max warp
+         position, plus an explicit "actual max: Xmm (off scale)" reading when it exceeds the
+         display range, so the real severity is never hidden behind a maxed-out color. (2) Wireframe
+         toggle silently did nothing while Panel flatness was on, since that overlay hides the solid
+         itself (v1.27.0) and there's nothing left to wireframe — now dims and disables that row
+         while Panel flatness is active instead of leaving a dead switch with no explanation.
+         (3) README.md and EXTENDED.md refreshed to cover everything shipped since v1.22.0 that
+         never made it into the standalone docs (only the in-file changelog and Help modal had it):
+         the subdivision slider, panel outlines, the legend and its marker, solid auto-hide, and
+         Helix's render-resolution panel granularity. Also corrected EXTENDED.md's Camera framing
+         section, which still described the old one-shot hasFramedOnce guard superseded by
+         pendingReframe back in v1.23.0, and added a new "Overlay decoration sizing" section
+         documenting footprintExtent (v1.23.0), which had no standalone-doc coverage at all despite
+         fixing several real bugs (oversized labels/cones on tall buildings, Bend's giant base plane).
 v1.29.0 - 2026-07-18 - User reported the panel boundaries were faint/unreadable after using the new
          "subdivide each face into N panels" slider (v1.28.0) — checked the sidebar label's CSS
          first (identical markup/classes to every other slider-row label, ruled out as the cause),
@@ -729,9 +745,16 @@ v1.0.0 - 2026-07-17 - Initial build. Twist operation on four cross-section prese
   #warpLegend.show{display:block;}
   #warpLegend .warpLegendTitle{color:var(--muted); margin-bottom:5px;}
   #warpLegend .warpLegendBar{
-    width:150px; height:8px;
+    width:150px; height:8px; position:relative;
     background:linear-gradient(to right, #2f9e44 0%, #f2c14e 50%, #c0392b 100%);
     border:1px solid var(--line);
+  }
+  #warpLegend .warpLegendMarker{
+    position:absolute; top:-3px; bottom:-3px; width:2px;
+    background:var(--ink); transform:translateX(-50%);
+  }
+  #warpLegend .warpLegendActual{
+    margin-top:4px; font-family:'Space Mono', monospace; font-size:0.68rem; color:var(--ink);
   }
   #warpLegend .warpLegendTicks{
     display:flex; justify-content:space-between;
@@ -792,6 +815,7 @@ v1.0.0 - 2026-07-17 - Initial build. Twist operation on four cross-section prese
     padding:7px 0; font-size:0.82rem; border-bottom:1px solid var(--line);
   }
   .toggle-row:last-child{border-bottom:none;}
+  .toggle-row.disabled{opacity:0.4; pointer-events:none;}
   .switch{
     width:34px; height:18px; background:var(--line); position:relative;
     cursor:pointer; flex-shrink:0;
@@ -914,12 +938,13 @@ v1.0.0 - 2026-07-17 - Initial build. Twist operation on four cross-section prese
     </div>
     <div id="warpLegend">
       <div class="warpLegendTitle">panel warp (off-planar)</div>
-      <div class="warpLegendBar"></div>
+      <div class="warpLegendBar"><div class="warpLegendMarker" id="warpLegendMarker"></div></div>
       <div class="warpLegendTicks mono">
         <span id="warpLegendLo">0</span>
         <span id="warpLegendMid">25mm</span>
         <span id="warpLegendHi">50mm+</span>
       </div>
+      <div class="warpLegendActual" id="warpLegendActual"></div>
     </div>
   </div>
 
@@ -1110,7 +1135,7 @@ v1.0.0 - 2026-07-17 - Initial build. Twist operation on four cross-section prese
         <span id="floorLinesLabel">Floor lines (per floor)</span>
         <div class="switch on" data-toggle="floorlines"></div>
       </div>
-      <div class="toggle-row">
+      <div class="toggle-row" id="wireframeRow">
         <span>Wireframe</span>
         <div class="switch" data-toggle="wireframe"></div>
       </div>
@@ -1181,7 +1206,7 @@ v1.0.0 - 2026-07-17 - Initial build. Twist operation on four cross-section prese
 <script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
 <script src="https://cdn.jsdelivr.net/npm/three@0.128.0/examples/js/controls/OrbitControls.js"></script>
 <script>
-const APP_VERSION = '1.29.0';
+const APP_VERSION = '1.30.0';
 
 // ---------- toast ----------
 let toastTimer=null;
@@ -2654,6 +2679,16 @@ function rebuild(){
       document.getElementById('warpLegendLo').textContent = '0';
       document.getElementById('warpLegendMid').textContent = toDisplaySmallLen(0.025).toFixed(0) + u2;
       document.getElementById('warpLegendHi').textContent = toDisplaySmallLen(0.05).toFixed(0) + u2 + '+';
+      // v1.30.0: the gradient itself clamps at 50mm (every panel past that reads identically red),
+      // so a marker on the bar plus an explicit "actual max" readout shows where THIS model's worst
+      // panel actually falls — including well past the display range, which the color alone can't
+      // distinguish (200mm and 51mm both render as solid red without this).
+      const maxWarpMM = maxWarpM * 1000;
+      const pct = Math.min(Math.max(maxWarpMM / 50, 0), 1) * 100;
+      document.getElementById('warpLegendMarker').style.left = pct + '%';
+      const actualStr = toDisplaySmallLen(maxWarpM).toFixed(1) + u2;
+      document.getElementById('warpLegendActual').textContent =
+        maxWarpMM > 50 ? `actual max: ${actualStr} (off scale)` : `actual max: ${actualStr}`;
 
       const positions = [], colors = [], outlinePositions = [];
       for(const panel of panels){
@@ -3211,13 +3246,19 @@ document.querySelectorAll('.switch').forEach(sw=>{
   sw.addEventListener('click', ()=>{
     state.overlays[key] = !state.overlays[key];
     sw.classList.toggle('on');
-    if(key === 'panelwarp'){
-      document.getElementById('panelSubdivBlock').style.display = state.overlays.panelwarp ? '' : 'none';
-    }
+    if(key === 'panelwarp') syncPanelwarpDependentUI();
     persist(); rebuild();
   });
 });
-document.getElementById('panelSubdivBlock').style.display = state.overlays.panelwarp ? '' : 'none';
+// v1.30.0: Panel flatness (v1.27.0) hides the solid itself while it's on, so the Wireframe toggle
+// has nothing left to wireframe and silently does nothing — dimming it (rather than leaving a
+// switch that flips with no visible effect) tells the user why, instead of leaving them to wonder
+// if it's broken. Same panelwarp-dependent-UI update also covers the subdivision slider (v1.28.0).
+function syncPanelwarpDependentUI(){
+  document.getElementById('panelSubdivBlock').style.display = state.overlays.panelwarp ? '' : 'none';
+  document.getElementById('wireframeRow').classList.toggle('disabled', state.overlays.panelwarp);
+}
+syncPanelwarpDependentUI();
 
 // apply saved preset button state
 [...presetGrid.children].forEach(c=>{

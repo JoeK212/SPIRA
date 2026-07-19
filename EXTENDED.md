@@ -147,9 +147,50 @@ lines use to avoid z-fighting with the coincident solid surface.
 
 Applies uniformly across all six modes via the same `layerPointFn`/`profile`/`closed`/`loopCount`/
 `stepM` pattern as floor lines and the normals overlay (`floors`/`floorHeightM` for the first five
-modes, `helixTurns`/`helixPitchM` for Helix) — for Helix specifically, "panels" span turn
-boundaries and generator segments rather than floors and cross-section edges, but the same function
-handles it without branching, since it only depends on `layerPointFn`'s returned points.
+modes) — Helix is the one exception to the pattern-sharing: it uses the render resolution (`segs`,
+`h/segs`) rather than `helixTurns`/`helixPitchM`, because a "panel" spanning one entire 360-degree
+turn isn't a real fabrication unit the way a floor-to-floor curtain-wall panel is, and for the Line
+generator specifically (only 2 profile points, 1 edge spanning the whole ribbon width) using
+turns/pitch broke outright — the quad connecting a turn's start to its end lands at the SAME angle
+one revolution later, rendering as a large flat plane slicing through the helix instead of tracking
+the ribbon's actual curve. Render-resolution granularity is small enough for the flat-quad
+approximation to track the surface, and is itself a legitimate fabrication unit for a helical
+ribbon/stair stringer (small flat segments are how one would actually be built from stock).
+
+**Panel subdivision.** By default every named profile edge is measured as one panel spanning its
+full width, which reads as a large number on a wide building face — not because the math is wrong,
+but because no real curtain wall actually clads a whole ~75ft face as a single flat sheet.
+`subdivideProfileForPanels(profile, n, closed, subPerEdge)` interpolates `subPerEdge` additional
+points along each straight edge of the flat, *undeformed* profile before `layerPointFn` deforms
+them, reproducing what a finer real-world panelization scheme would look like at whatever bay count
+the user picks (`state.panelSubdiv`, slider range 1–12). `subPerEdge <= 1` is a verified true
+no-op — returns the original `profile`/`n` unchanged (identity, not just numerically equal) — so
+default behavior is untouched. Warp scales roughly linearly with panel width for a given rotation
+rate (verified against the Turning Torso case study: 23m/1 panel → 26.2in, 11.5m/2 panels →
+13.2in, ... 2.3m/10 panels → 2.6in). The sidebar shows a live "~X wide panels" readout computed
+from the actual first panel's edge length every rebuild, so the real-world bay size behind whatever
+N is chosen is never left to guesswork.
+
+**Rendering.** Each panel renders as two triangles with matching per-vertex colors from
+`warpColor()` — a green (`0x2f9e44`) → amber (`0xf2c14e`) → red (`0xc0392b`) gradient over an
+illustrative 0–50mm range — nudged outward from each panel's own centroid by 3%, the same technique
+slice rings and floor lines use to avoid z-fighting with the coincident solid surface. A second,
+slightly-further-out (4.5%) `LineSegments` outline is drawn around every panel's 4 edges so
+subdivided panel boundaries stay visible even when two neighboring panels land at similar enough
+warp to get near-identical fill colors — without it, a finely subdivided face reads as one
+undifferentiated wash of color instead of N distinct panels. The solid itself (`sideMesh` and both
+caps) sets `.visible = false` while the overlay is on, rather than being skipped from `solidGroup`
+entirely — `Box3.setFromObject()` (which `frameCameraDefault()` uses) traverses regardless of
+`.visible`, so camera framing is unaffected by the solid being hidden, but real coincident geometry
+that could z-fight with the panel quads is gone.
+
+**In-canvas legend.** A bottom-left viewport panel (visible only while the overlay is on) shows the
+same gradient with 0/25mm/50mm+ tick labels (or the inch equivalents in Imperial, via
+`toDisplaySmallLen`/`smallLenUnit`, the same conversion the HUD row uses) plus a marker positioned
+at `min(maxWarpMM/50, 1) × 100%` along the bar and an explicit "actual max" reading — since the
+gradient itself clamps at 50mm (every panel past that renders identically red), the marker and
+reading are what actually distinguish a model at 51mm from one at 200mm, which the color alone
+cannot.
 
 **Verification.** Checked headlessly before shipping against several known cases: a straight prism
 and pure Shear both measure exactly zero warp (Shear is an affine map, which preserves planarity of
@@ -177,9 +218,41 @@ text as something to check with the overlay.
 `frameCameraDefault()` fits an actual Three.js `Box3` computed from the rendered solid — the
 circumscribed-sphere radius of that box, checked against both horizontal and vertical FOV (whichever
 is more restrictive, so it doesn't under-frame a wide/short shape when the viewport happens to be
-narrower than tall), with 15% padding. This runs once, on the very first `rebuild()` after boot
-(`hasFramedOnce` guards against re-running it on every subsequent slider change, so mid-session
-zoom/orbit is never disturbed) — and again whenever the Home button is clicked.
+narrower than tall), with 15% padding. `Box3.setFromObject()` traverses every descendant of
+`solidGroup` regardless of `.visible`, so this stays correct even while Panel flatness (warp) hides
+the solid mesh itself (see above).
+
+Runs on the very first `rebuild()` after boot, again whenever the Home button is clicked, and
+again whenever `pendingReframe` is true at the start of a `rebuild()` — a flag set by the button
+handlers for Operation, cross-section preset, Helix generator, a case study, and Reset values, all
+of which can change the model's size/shape/position drastically enough that the previous camera
+position would frame empty space or a sliver of the new model. Ordinary slider `input` events do
+NOT set it, so live-dragging a parameter never disturbs mid-session zoom/orbit — the same principle
+the original one-shot `hasFramedOnce` guard was protecting, generalized from "only the very first
+build" to "any actual reframe-worthy change," after real button-triggered framing failures (Helix
+nearly invisible after switching modes; Bend's base plane filling the viewport) showed the one-shot
+version wasn't enough.
+
+## Overlay decoration sizing
+
+Point-label size, the axis arrowhead cone, the origin marker, the surface-normals overlay length,
+and FFD handle radius are all sized off a single `footprintExtent` value — the (x,z) bounding
+extent of the model's BASE ring only (the first `n` points of `layerPositions`, i.e. one layer, not
+the whole solid), computed once per `rebuild()`. Earlier versions sized these off total model
+height `h` instead, which works fine for a roughly cube-proportioned model but breaks down for a
+tall, narrow real-building case study — The Shard (309.6m tall, ~28m footprint) made 10
+h-proportional point labels arranged around a 28m-wide base each read ~14m wide, guaranteeing
+overlap regardless of camera framing. `footprintExtent` fixes this by tracking the dimension these
+decorations are actually meant to read against (the footprint they're marking), not the one that
+happens to be largest for a tall building.
+
+Base plane B is sized from `footprintExtent` too, but has its own related history: an earlier
+version derived its equivalent value from the planar bounding extent of *every* layer in
+`layerPositions`, not just the base ring — correct for a mode that stays above its own footprint
+(Twist, Taper), but wrong for one that sweeps sideways through world space as it curves (Bend
+especially, whose solid can span a wide arc): the "base plane" was measuring the whole curved
+solid's footprint, not the actual base cross-section, producing a base plane many times larger than
+the building actually sitting on it.
 
 ## Export pipeline: loft profiles → Dynamo
 

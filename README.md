@@ -77,14 +77,26 @@ separate "slice rings" overlay shows the computational resolution the surface is
 **Panel flatness (warp).** Every operation except pure extrusion produces floor-to-floor,
 edge-to-edge panels — the actual quads a fabricator would cut, not the fine render mesh — that
 aren't perfectly flat. This overlay color-codes each real panel green (flat) through amber to red
-(warped) and the HUD reports the worst panel's warp in mm (or inches), using the standard
-curtain-wall "twist" tolerance measure: the perpendicular distance of one corner from the plane of
-the other three. The color scale (0–50mm) is illustrative, the same way case-study footprint sizes
-are — not a sourced tolerance spec, since real limits vary by system and manufacturer. Comparing
-Twist against Bend with this overlay on is a good demonstration: Bend's panels come out exactly
-flat at any angle, since it only sweeps the cross-section along an arc without ever rotating the
-local bend-axis direction (a true cylindrical bend of a flat sheet), while Twist warps every
-non-degenerate panel.
+(warped), with a legend in the bottom-left of the viewport (including a marker showing exactly
+where the current model's worst panel falls on the scale, and an explicit reading when it's off
+the top of the scale entirely), dark outlines around every panel so neighboring bays stay
+distinguishable even when their colors are close, and the HUD reports the worst panel's warp in mm
+(or inches), using the standard curtain-wall "twist" tolerance measure: the perpendicular distance
+of one corner from the plane of the other three. The solid itself hides automatically while this
+overlay is on, since the colored panels already cover the same surface and showing both at once
+z-fights. The color scale (0–50mm) is illustrative, the same way case-study footprint sizes are —
+not a sourced tolerance spec, since real limits vary by system and manufacturer.
+
+By default each named corner-to-corner edge is measured as a single panel, which can read as a
+large number on a wide building face — a "subdivide each face into N panels" slider (1–12, shown
+alongside the toggle) shows how a real curtain wall would actually reduce that by breaking each
+face into narrower bays, since warp scales roughly linearly with panel width for a given rotation
+rate; a live readout shows the resulting real-world panel width for whatever N is chosen.
+
+Comparing Twist against Bend with this overlay on is a good demonstration: Bend's panels come out
+exactly flat at any angle, since it only sweeps the cross-section along an arc without ever
+rotating the local bend-axis direction (a true cylindrical bend of a flat sheet), while Twist warps
+every non-degenerate panel.
 
 **Cross-section sizing.** Each preset (square, triangle, hexagon, octagon, ellipse, star) is
 generated at its own arbitrary proportions internally, then scaled — independently in width (x) and
