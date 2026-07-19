@@ -432,6 +432,14 @@ check('saveSnapshot() stops a running animation before capturing state — other
 check('the Compare section is in ADVANCED_ONLY_IDS (tooling around the shape, not "the shape itself") — consistent with Overlays/Export/Units/Projection, not left visible in Simple mode by oversight',
   /const ADVANCED_ONLY_IDS = \[[^\]]*'compareSection'[^\]]*\];/.test(src));
 
+/* ===================== v1.48.0 — Free (FFD) Play no-op fix ===================== */
+sectionHeader('v1.48.0 — Free (FFD) Play no-op fix');
+check('startAnimation()\'s FFD branch checks for at least one control point with real offset magnitude before starting, and shows a toast + returns early rather than entering a no-op Pause state when every offset is still at Free\'s own default/Reset value (exactly zero)',
+  (function(){
+    const m = src.match(/function startAnimation\(\)\{[\s\S]*?\n\}/);
+    return !!m && m[0].includes('hasOffset') && m[0].includes("toast('Drag a corner handle first") && m[0].includes('return;');
+  })());
+
 /* ===================== Summary ===================== */
 console.log(`\n${BOLD}${'-'.repeat(40)}${RESET}`);
 console.log(`${GREEN}${pass} passed${RESET}, ${fail ? RED : DIM}${fail} failed${RESET}`);

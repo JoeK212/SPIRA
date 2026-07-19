@@ -4,6 +4,18 @@ Interactive explorer of architectural deformation operations — twisting, taper
 Joe.K · axisbim.io
 
 CHANGELOG
+v1.48.0 - 2026-07-19 - Fixed Play doing nothing on Free (FFD), reported by user testing along with a
+         correct diagnosis of why: unlike every other mode, Free has no single scalar deformation
+         parameter to animate — 8 independently-draggable control points instead. startAnimation()'s
+         FFD branch already scaled every offset by the same 0->1 blend factor (a reasonable generic
+         "animate toward the current target," the same idea as every other mode's 0->dialed-in
+         value), but the target IS zero at Free's own default/Reset state (all 8 offsets exactly
+         zero, confirmed in resetModeValues) — so clicking Play with no handle ever dragged flipped
+         the button to Pause and visibly did nothing, reading as broken rather than as "nothing to
+         animate yet." Added a check (any control point's offset magnitude > 1cm — verified the
+         threshold rejects the true default and floating-point noise from an accidental sub-mm nudge
+         while accepting any real drag) that shows a clear toast and declines to start instead of
+         silently entering a no-op Pause state. 1 new audit_deploy.js check.
 v1.47.0 - 2026-07-19 - Three features requested together: animation, comparison mode, more case
          studies.
          CASE STUDY: added the Guggenheim Museum NYC's spiral ramp as Helix's first case study —
@@ -1680,7 +1692,7 @@ v1.0.0 - 2026-07-17 - Initial build. Twist operation on four cross-section prese
 <script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
 <script src="https://cdn.jsdelivr.net/npm/three@0.128.0/examples/js/controls/OrbitControls.js"></script>
 <script>
-const APP_VERSION = '1.47.0';
+const APP_VERSION = '1.48.0';
 
 // ---------- toast ----------
 let toastTimer=null;
@@ -1747,7 +1759,9 @@ const HELP_HTML = `
   and whatever's currently dialed in, looping back and forth so you can watch the deformation happen
   rather than only comparing two static slider positions. Dragging any slider, switching Operation,
   loading a case study, or Reset all stop it automatically — sliders and the animation would
-  otherwise fight over the same values every frame.</p>
+  otherwise fight over the same values every frame. Free has no slider to animate toward — drag at
+  least one corner handle first; Play scales every handle's offset together from flat to however
+  they're currently pushed.</p>
 
   <h4>Compare</h4>
   <p>"Save snapshot" (Advanced view) freezes the current shape as a translucent reference ghost, so
@@ -4418,6 +4432,18 @@ function easeInOutCubic(t){ return t < 0.5 ? 4*t*t*t : 1 - Math.pow(-2*t+2, 3)/2
 const playPauseBtn = document.getElementById('playPauseBtn');
 function startAnimation(){
   if(state.mode === 'ffd'){
+    // Free has no single scalar deformation parameter the way every other mode does — 8
+    // independently-draggable control points instead. "Animate toward the current target" still
+    // makes sense generically (scale every offset by the same 0->1 blend factor, same idea as every
+    // other mode's 0->dialed-in-value), but ONLY once at least one handle has actually been moved;
+    // starting from Free's own default/Reset state (all 8 offsets exactly zero) would animate
+    // toward a target that's also zero — Play would flip to Pause and visibly do nothing, which
+    // read as broken rather than as "there's nothing to animate yet." Caught by user testing.
+    const hasOffset = state.ffdOffsets.some(o => Math.hypot(o.dx, o.dy, o.dz) > 0.01);
+    if(!hasOffset){
+      toast('Drag a corner handle first — nothing to animate yet');
+      return;
+    }
     animPlayer = { startedAt: performance.now(), targetOffsets: state.ffdOffsets.map(o=>({...o})) };
   } else {
     const params = ANIMATABLE_PARAMS[state.mode] || [];
