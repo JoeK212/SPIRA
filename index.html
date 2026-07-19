@@ -4,6 +4,22 @@ Interactive explorer of architectural deformation operations — twisting, taper
 Joe.K · axisbim.io
 
 CHANGELOG
+v1.28.0 - 2026-07-18 - Added a "subdivide each face into N panels" slider (1-12, shown under Panel
+         flatness while that overlay is on) after the user asked whether Turning Torso's 26.2in max
+         panel warp figure meant the case study's dimensions were wrong. They weren't — 90 degrees
+         over 54 floors on a sourced 23m footprint is correct, and re-deriving it standalone
+         reproduced 26.22in exactly. What that number actually exposed: the app's 4-corner Square
+         profile treats an entire ~75ft-wide building face as ONE panel, which is not how any real
+         twisting facade is built — real curtain walls break each face into many narrower bays
+         specifically because warp scales roughly linearly with panel width for a given rotation
+         rate (verified: 23m/1 panel = 26.2in, 11.5m/2 panels = 13.2in, ... 2.3m/10 panels = 2.6in,
+         a near-exact linear relationship). New subdivideProfileForPanels() interpolates additional
+         points along each straight edge of the flat, undeformed profile before layerPointFn
+         deforms them — subPerEdge=1 is a verified true no-op (identity, not just numerically equal)
+         so default behavior is unchanged. Sidebar shows a live "~Xft wide panels" readout (computed
+         from the actual first panel's edge length every rebuild) so the real-world bay size behind
+         whatever N is chosen is never left to guesswork. Applies uniformly to every mode via the
+         same profile/layerPointFn pattern as the warp computation itself.
 v1.27.0 - 2026-07-18 - User reported color jitter/flicker between the solid surface and the Panel
          flatness (warp) overlay's panels — z-fighting, worst at grazing viewing angles where the
          existing 3% outward nudge isn't enough screen-space separation on some GPUs/drivers, asked
@@ -1100,6 +1116,11 @@ v1.0.0 - 2026-07-17 - Initial build. Twist operation on four cross-section prese
         <span>Panel flatness (warp)</span>
         <div class="switch" data-toggle="panelwarp"></div>
       </div>
+      <div class="slider-row" id="panelSubdivBlock" style="display:none; margin-top:6px;">
+        <div class="top"><span>subdivide each face into</span><span class="val" id="panelSubdivVal">1 panel</span></div>
+        <input type="range" id="panelSubdivSlider" min="1" max="12" step="1" value="1">
+        <div style="font-size:0.72rem; color:var(--muted); margin-top:2px;" id="panelSubdivNote"></div>
+      </div>
     </section>
 
     <section class="group">
@@ -1150,7 +1171,7 @@ v1.0.0 - 2026-07-17 - Initial build. Twist operation on four cross-section prese
 <script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
 <script src="https://cdn.jsdelivr.net/npm/three@0.128.0/examples/js/controls/OrbitControls.js"></script>
 <script>
-const APP_VERSION = '1.27.0';
+const APP_VERSION = '1.28.0';
 
 // ---------- toast ----------
 let toastTimer=null;
@@ -1230,9 +1251,12 @@ const HELP_HTML = `
   mm/inches: the perpendicular distance of one corner from the plane of the other three, the
   standard curtain-wall "twist" tolerance measure. The HUD number updates live even with the
   colored overlay off. The solid itself hides automatically while this overlay is on, since the
-  colored panels already cover the same surface and showing both at once can z-fight. The color
-  scale (0–50mm) is illustrative, not a sourced tolerance spec — real limits vary by system and
-  manufacturer.</p>
+  colored panels already cover the same surface and showing both at once can z-fight. A
+  "subdivide each face into N panels" slider appears alongside the toggle — by default each real
+  building face is measured as one single panel, which can produce a large warp figure on a wide
+  face; subdividing shows how a real curtain wall would actually reduce that by breaking each face
+  into narrower bays, with a live readout of the resulting panel width. The color scale (0–50mm)
+  is illustrative, not a sourced tolerance spec — real limits vary by system and manufacturer.</p>
 
   <h4>View navigation</h4>
   <p>Drag to orbit, scroll to zoom, right-drag (or two-finger drag) to pan. <strong>Top</strong>,
@@ -1313,6 +1337,9 @@ const state = {
                         // from segments (render/export facet resolution above): a native Revit loft
                         // only needs enough profiles for its own curve fit to converge, not enough
                         // to look smooth as flat triangles
+  panelSubdiv: 1, // v1.28.0: how many narrower bays to split each real face/edge into before
+                   // measuring panel warp — 1 reproduces the original behavior (one panel spanning
+                   // the whole named-corner-to-named-corner edge). See computePanelWarp's caller.
   overlays: { axis:true, plane:true, rulings:true, slicerings:true, floorlines:true, wireframe:false, labels:false, normals:false, panelwarp:false }
 };
 
@@ -1776,6 +1803,33 @@ function distSqArr(arr, ia, ib){
   const bx=arr[ib*3], by=arr[ib*3+1], bz=arr[ib*3+2];
   const dx=ax-bx, dy=ay-by, dz=az-bz;
   return dx*dx+dy*dy+dz*dz;
+}
+
+// Subdivides each real edge of the (undeformed, flat) profile into subPerEdge narrower straight
+// sub-edges before panel warp is measured — v1.28.0, added after a user asked whether a real
+// building's ~2in max panel warp figure made sense. It does: the app's own math was correct, but
+// with the default named-corner-only profile (4 points for Square), each "panel" spans an entire
+// building face — e.g. ~75ft wide for Turning Torso's case study — which is not how a real twisting
+// facade is ever actually clad; real curtain walls break each face into many narrower bays
+// specifically because warp scales roughly linearly with panel width for a given rotation rate.
+// This lets the overlay show that directly: interpolating new points along each straight edge in
+// the flat 2D profile (before layerPointFn deforms them) reproduces exactly what a finer real-world
+// panelization scheme would look like, at whatever bay count the user picks. subPerEdge=1 is a
+// no-op (returns the original profile unchanged) so nothing about the default behavior changes.
+function subdivideProfileForPanels(profile, n, closed, subPerEdge){
+  if(subPerEdge <= 1) return { subProfile: profile, subN: n };
+  const numEdges = closed ? n : n-1;
+  const subProfile = [];
+  for(let i=0; i<numEdges; i++){
+    const i2 = (i+1)%n;
+    const p0 = profile[i], p1 = profile[i2];
+    for(let s=0; s<subPerEdge; s++){
+      const t = s/subPerEdge;
+      subProfile.push([ p0[0]+(p1[0]-p0[0])*t, p0[1]+(p1[1]-p0[1])*t ]);
+    }
+  }
+  if(!closed) subProfile.push(profile[n-1]); // open profiles (Helix Line) need the final endpoint too
+  return { subProfile, subN: subProfile.length };
 }
 
 // Panel flatness / warp (v1.22.0). For every real floor-to-floor, edge-to-edge panel (four
@@ -2563,9 +2617,21 @@ function rebuild(){
   {
     const loopCount = state.mode === 'helix' ? segs : state.floors;
     const stepM = state.mode === 'helix' ? h/segs : state.floorHeightM;
-    const { panels, maxWarpM } = computePanelWarp(profile, layerPointFn, n, closed, loopCount, stepM);
+    // v1.28.0: subdivide each real edge into state.panelSubdiv narrower bays before measuring warp
+    // — subPerEdge=1 is a no-op, returning the original profile/n unchanged.
+    const { subProfile, subN } = subdivideProfileForPanels(profile, n, closed, state.panelSubdiv);
+    const { panels, maxWarpM } = computePanelWarp(subProfile, layerPointFn, subN, closed, loopCount, stepM);
     document.getElementById('hudPanelWarp').textContent =
       toDisplaySmallLen(maxWarpM).toFixed(1) + ' ' + smallLenUnit();
+    if(panels.length){
+      // Representative panel width (first panel's own edge length at the base) so the sidebar note
+      // reads e.g. "~7.7ft wide panels" instead of leaving the user to guess what N bays means in
+      // real units — recomputed every rebuild since it depends on the live footprint size too.
+      const p0 = panels[0].p00, p1 = panels[0].p01;
+      const panelWidthM = Math.hypot(p1[0]-p0[0], p1[1]-p0[1], p1[2]-p0[2]);
+      document.getElementById('panelSubdivNote').textContent =
+        `~${toDisplayLen(panelWidthM).toFixed(1)}${unitLabels().len} wide panels`;
+    }
 
     const warpLegendEl = document.getElementById('warpLegend');
     if(state.overlays.panelwarp){
@@ -2793,6 +2859,7 @@ const helixTubeRSlider = document.getElementById('helixTubeRSlider');
 const helixTubeOffsetSlider = document.getElementById('helixTubeOffsetSlider');
 const footprintWidthSlider = document.getElementById('footprintWidthSlider');
 const footprintDepthSlider = document.getElementById('footprintDepthSlider');
+const panelSubdivSlider = document.getElementById('panelSubdivSlider');
 alphaSlider.value = state.alphaMax;
 taperVSlider.value = state.taperV;
 taperWSlider.value = state.taperW;
@@ -2801,6 +2868,8 @@ floorsSlider.value = state.floors;
 resSlider.value = state.segments;
 loftProfileCountSlider.value = state.loftProfileCount;
 helixTurnsSlider.value = state.helixTurns;
+panelSubdivSlider.value = state.panelSubdiv;
+document.getElementById('panelSubdivVal').textContent = state.panelSubdiv + (state.panelSubdiv===1 ? ' panel' : ' panels');
 
 const REFERENCE_TEXT = {
   twist: `Twist keeps a base plane B and a vertical axis A fixed, and rotates every horizontal slice at
@@ -3107,6 +3176,11 @@ footprintDepthSlider.addEventListener('input', e=>{
   state.footprintDepthM = state.units === 'metric' ? v : v / M_TO_FT;
   syncSliderLabels(); persist(); rebuild();
 });
+panelSubdivSlider.addEventListener('input', e=>{
+  state.panelSubdiv = parseInt(e.target.value);
+  document.getElementById('panelSubdivVal').textContent = state.panelSubdiv + (state.panelSubdiv===1 ? ' panel' : ' panels');
+  persist(); rebuild();
+});
 
 document.querySelectorAll('.switch').forEach(sw=>{
   const key = sw.dataset.toggle;
@@ -3114,9 +3188,13 @@ document.querySelectorAll('.switch').forEach(sw=>{
   sw.addEventListener('click', ()=>{
     state.overlays[key] = !state.overlays[key];
     sw.classList.toggle('on');
+    if(key === 'panelwarp'){
+      document.getElementById('panelSubdivBlock').style.display = state.overlays.panelwarp ? '' : 'none';
+    }
     persist(); rebuild();
   });
 });
+document.getElementById('panelSubdivBlock').style.display = state.overlays.panelwarp ? '' : 'none';
 
 // apply saved preset button state
 [...presetGrid.children].forEach(c=>{
