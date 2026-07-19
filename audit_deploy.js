@@ -477,8 +477,8 @@ check('paramsForMode() is used both for the primary operation\'s own params in r
     const compoundUse = /const secondaryParams = paramsForMode\(state\.compoundMode\);/.test(src);
     return primaryUse && compoundUse;
   })());
-check('volume falls back to numeric computeMeshVolume() whenever state.compoundMode is set, not just for FFD — the closed-form formulas were each derived for a single operation',
-  /\(state\.mode === 'ffd' \|\| state\.compoundMode\)\s*\n\s*\? computeMeshVolume\(sideGeo, bottomCap, topCap\)/.test(src));
+check('volume falls back to numeric computeMeshVolume() whenever state.compoundMode is set, not just for FFD (and, since v1.51.0, not just for Morph either) — the closed-form formulas were each derived for a single, non-blended operation',
+  /\(state\.mode === 'ffd' \|\| state\.mode === 'morph' \|\| state\.compoundMode\)\s*\n\s*\? computeMeshVolume\(sideGeo, bottomCap, topCap\)/.test(src));
 check('loadCaseStudy() clears state.compoundMode — a case study is a specific real building\'s single-operation figure, and compounding on top would misrepresent it',
   (function(){
     const m = src.match(/function loadCaseStudy\(key\)\{[\s\S]*?\n\}/);
@@ -517,6 +517,52 @@ check('all 14 real computeLayerPoint( call sites were renamed to computeLayerPoi
   })());
 check('the compound picker excludes whichever mode is currently primary from its own choices (a mode compounded with itself isn\'t a coherent second step)',
   /btn\.style\.display = \(m === state\.mode\) \? 'none' : '';/.test(src));
+
+/* ===================== v1.51.0 — Morph mode ===================== */
+sectionHeader('v1.51.0 — Morph mode');
+check('computeLayerPoint\'s morph branch lerps [fromX,fromZ]→[toX,toZ] by (y/h)*blend, not a bare y/h — needed so v1.51.2\'s morphBlend animation has a 0..1 quantity to scale',
+  (function(){
+    const m = src.match(/if\(mode === 'morph'\)\{[\s\S]*?\n  \}/);
+    return !!m && m[0].includes('const blend = params.blend === undefined ? 1 : params.blend;') && m[0].includes('const t = (y/h) * blend;');
+  })());
+check('paramsForMode() supplies morph\'s {blend} from state.morphBlend, alongside the other three axis-based modes\' params',
+  /: mode === 'morph' \? \{ blend: state\.morphBlend \}/.test(src));
+check('computeLayerPointCompound() explicitly excludes morph from compounding (alongside helix/ffd/bend) — morph doesn\'t preserve the same-y x/z-only transform the compound wrapper relies on',
+  /mode !== 'helix' && mode !== 'ffd' && mode !== 'bend' && mode !== 'morph'/.test(src));
+check('buildMorphProfile() exists and Morph\'s profile is built from it, not from scaledProfile() like the axis-based modes',
+  /function buildMorphProfile\(\)\{/.test(src) && /state\.mode === 'morph' \? buildMorphProfile\(\)/.test(src));
+check('subdivideProfileForPanels interpolates profile points element-wise via .map (not hardcoded to indices 0/1) so Morph\'s 4-tuple [fromX,fromZ,toX,toZ] points survive panel subdivision intact',
+  (function(){
+    const m = src.match(/function subdivideProfileForPanels\([\s\S]*?\n\}/);
+    return !!m && m[0].includes('subProfile.push(p0.map((v,k) => v + (p1[k]-v)*t));');
+  })());
+check('the Compound section stays hidden for Morph (like FFD/Helix) — the mode-switch handler clears state.compoundMode when switching primary to morph',
+  /state\.mode === 'bend' \|\| state\.mode === 'ffd' \|\| state\.mode === 'helix' \|\| state\.mode === 'morph'\) state\.compoundMode = null/.test(src));
+check('footprint sliders were widened to accommodate Lotte Super Tower\'s 70m square base (30m/100ft cap would have clipped it)',
+  /morphParamsBlock/.test(src) && /80/.test(src.match(/footprintWidthSlider\.max\s*=[\s\S]{0,40}/)?.[0] || src));
+
+/* ===================== v1.51.1 — ground grid resync ===================== */
+sectionHeader('v1.51.1 — ground grid resync');
+check('syncGroundGridExtent() derives the grid extent from the built geometry\'s own bounding radius (60% headroom, clamped [300,4000]) instead of a fixed 300-unit extent',
+  (function(){
+    const m = src.match(/function syncGroundGridExtent\(radius\)\{[\s\S]*?\n\}/);
+    return !!m && m[0].includes('Math.min(4000, Math.max(300,') && m[0].includes('diameter*1.6');
+  })());
+check('syncGroundGridExtent() only rebuilds the grid when the needed extent actually changes (a real diff check), not on every rebuild() call',
+  /if\(Math\.abs\(desired - groundGridExtent\) > 1e-6\)\{/.test(src));
+check('rebuild() calls syncGroundGridExtent(lastModelRadius) after lastModelRadius is refreshed from the current build\'s own bounding box, so the grid tracks the actual model every time, not just on Home/Top/Front reframes',
+  /lastModelRadius = radiusBox\.getSize\(new THREE\.Vector3\(\)\)\.length\(\) \/ 2;\s*\n\s*syncGroundGridExtent\(lastModelRadius\);/.test(src));
+check('default theme is Blueprint (dark), not Light — a user\'s own saved localStorage preference still overrides this default on repeat visits (checked via the localStorage-restore code running after uiPrefs\' own default)',
+  /uiPrefs = \{ uiMode: 'simple', sidebarWidthPx: 300, theme: 'dark' \}/.test(src));
+
+/* ===================== v1.51.2 — Morph Play/Pause fix ===================== */
+sectionHeader('v1.51.2 — Morph Play/Pause fix');
+check('ANIMATABLE_PARAMS has a morph entry (morphBlend, from:0) instead of falling through to the old special-case "can\'t animate" toast',
+  /morph: \[\{key:'morphBlend', from:0\}\]/.test(src));
+check('state.morphBlend defaults to 1.0 (full morph — matches pre-v1.51.2 always-on behavior) so existing shared links/localStorage sessions without the field still render exactly as before',
+  /morphBlend:\s*1\.0/.test(src));
+check('startAnimation() no longer special-cases morph with its own toast — it falls through to the same generic ANIMATABLE_PARAMS path FFD\'s non-empty branch and every axis-based mode already use',
+  !/toast\(['"][^'"]*morph[^'"]*animat/i.test(src) && !/mode === 'morph'[\s\S]{0,80}toast\(/.test(src));
 
 /* ===================== Summary ===================== */
 console.log(`\n${BOLD}${'-'.repeat(40)}${RESET}`);

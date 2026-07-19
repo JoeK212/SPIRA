@@ -4,6 +4,42 @@ Interactive explorer of architectural deformation operations — twisting, taper
 Joe.K · axisbim.io
 
 CHANGELOG
+v1.51.2 - 2026-07-19 - Fixed Play/Pause doing nothing on Morph. Root cause: Morph had no animatable
+         parameter at all — computeLayerPoint's morph branch always fully blended by y/h with
+         nothing to ping-pong, so Play just showed a "can't animate" toast. Added state.morphBlend
+         (default 1.0, not exposed as its own slider) — computeLayerPoint('morph') now scales its
+         lerp by params.blend, and Play animates morphBlend 0→1→0 (0 = pure extrusion of the FROM
+         shape, matching the "neutral start" convention every other mode's animation already uses;
+         animating morphToWidthM/DepthM directly wasn't viable since matched sizes still don't equal
+         "no change" whenever fromPreset≠toPreset). Removed the special-case toast; Morph now flows
+         through the same ANIMATABLE_PARAMS table as every other mode.
+v1.51.1 - 2026-07-19 - Fixed ground grid visibly cut off short of the built solid's edges in Bend
+         mode at small bend angles (β_max=6°, R=h/β=877ft — a small angle sweeps a very wide arc
+         regardless of footprint size). Root cause: the grid was a fixed 300-unit extent, a leftover
+         assumption from the pre-Lotte 30m footprint cap, never revisited when the footprint sliders
+         were widened to 80m. Grid extent now resyncs every rebuild() from the actual built
+         geometry's own bounding radius (reusing the Box3 already computed for lastModelRadius, no
+         duplicate work) — 60% headroom beyond the circumscribed diameter, clamped [300, 4000], only
+         rebuilds grid geometry when the needed extent actually changes. Also switched the default
+         theme from Light to Blueprint (dark) per explicit request — a user's saved localStorage
+         preference still overrides this on repeat visits.
+v1.51.0 - 2026-07-19 - Morph mode shipped, per user request after Lotte Super Tower (SOM, unbuilt,
+         555m/112fl, 70m square base tapering to a 40m circular top) was rejected from every existing
+         mode including Compound: it's a cross-section TOPOLOGY change (square to circle), not a
+         scale/twist/shear of one consistent profile shape. Each profile point becomes a 4-tuple
+         [fromX,fromZ,toX,toZ] instead of [x,z], letting it slot into the existing
+         buildDeformedGeometry/cap/panel pipeline almost unmodified — computeLayerPoint's morph
+         branch lerps p[0..1]→p[2..3] by y/h. FROM/TO presets independently resampled to a shared
+         N=32 points via ray-casting from the origin at evenly-spaced angles (not arc-length) so
+         corresponding indices share the same angle in both shapes and don't twist against each
+         other mid-blend — verified numerically before shipping. Generalized
+         subdivideProfileForPanels to interpolate ALL point elements (was hardcoded to 2 for [x,z]),
+         so Morph's 4-tuples survive panel subdivision and the loft-profiles JSON export produces one
+         N-point level per height for free. No closed-form volume (numeric mesh fallback, like FFD).
+         Doesn't compound with other modes (like FFD/Helix). Footprint sliders widened 30m/100ft →
+         80m/260ft for Lotte's 70m base (same fix pattern as Guggenheim's radius sliders). Case
+         study: Lotte Super Tower, square→ellipse, linear blend only (documented simplification,
+         same treatment as Shard/Pisa).
 v1.50.0 - 2026-07-19 - Compound operations — apply a second deformation after the first (e.g. Twist
          then Taper), the single biggest feature request this project has had. Motivation: every
          rejected case study so far (Shanghai Tower, Absolute World, and in spirit Capital Gate) was
@@ -1839,7 +1875,7 @@ v1.0.0 - 2026-07-17 - Initial build. Twist operation on four cross-section prese
 <script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
 <script src="https://cdn.jsdelivr.net/npm/three@0.128.0/examples/js/controls/OrbitControls.js"></script>
 <script>
-const APP_VERSION = '1.50.0';
+const APP_VERSION = '1.51.2';
 
 // ---------- toast ----------
 let toastTimer=null;
