@@ -4,6 +4,24 @@ Interactive explorer of architectural deformation operations — twisting, taper
 Joe.K · axisbim.io
 
 CHANGELOG
+v1.25.0 - 2026-07-18 - Fixed a real bug user spotted from a screenshot — a large flat green plane
+         cutting straight through the Helix Line generator's ramp with Panel flatness (warp) on.
+         Root cause: the panel-warp overlay reused floor lines' turns/pitch as its loopCount/stepM
+         for Helix, same as every other overlay that treats one full 360-degree turn as Helix's
+         analog to a floor — reasonable for floor LINES (a ring is a ring regardless of size), but
+         wrong for panel WARP, where the quad's four corners are what gets drawn. Line's generator
+         has only 2 profile points (1 edge, spanning the whole ribbon from inner to outer radius),
+         so each "panel" connected a turn's start to its end — landing at the exact same angle one
+         full revolution later — as one huge, genuinely flat (0.000mm warp, verified) quad that
+         doesn't remotely track the helical surface between those two points, rendering as a solid
+         plane where no such surface exists. Switched Helix's panel-warp granularity from
+         turns/pitch to the render resolution (segs/h-per-segment) instead — small enough for the
+         flat-quad approximation to actually approximate the surface (verified: max panel diagonal
+         span dropped from 3.86m to 1.4m at default params, warp went from a misleading 0.000mm to a
+         real ~31.6mm reflecting genuine local curvature), and a legitimate fabrication-relevant unit
+         for a helical ribbon in its own right (small flat stringer segments, not one full turn, are
+         how such a ramp would actually be built from stock). Floor-based modes (Twist/Taper/Shear/
+         Bend/FFD) untouched — floors remain the deliberate real-architectural-panel unit there.
 v1.24.0 - 2026-07-18 - Fixed a real bug reported as "toggle Panel flatness off, canvas frame jumps" —
          the toggle was incidental, not the cause. rebuild() (which runs on every slider tick and
          every overlay checkbox, not just Panel flatness) was unconditionally calling
@@ -1079,7 +1097,7 @@ v1.0.0 - 2026-07-17 - Initial build. Twist operation on four cross-section prese
 <script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
 <script src="https://cdn.jsdelivr.net/npm/three@0.128.0/examples/js/controls/OrbitControls.js"></script>
 <script>
-const APP_VERSION = '1.24.0';
+const APP_VERSION = '1.25.0';
 
 // ---------- toast ----------
 let toastTimer=null;
@@ -2458,11 +2476,21 @@ function rebuild(){
 
   // Panel flatness / warp (v1.22.0) — stats are always computed (cheap: floors x edges, not
   // floors x render resolution) so the HUD number stays live even with the visual overlay off;
-  // only the colored quad mesh itself is gated behind the toggle. Same loopCount/stepM pattern as
-  // floor lines and the normals overlay (turns/pitch in Helix, floors/floorHeightM elsewhere).
+  // only the colored quad mesh itself is gated behind the toggle. Floors/floorHeightM for the first
+  // five modes — a real architectural unit, matching floor lines/normals. Helix does NOT reuse
+  // turns/pitch here the way floor lines does: a "panel" spanning one entire 360-degree turn isn't
+  // a real fabrication unit the way a floor-to-floor curtain-wall panel is, and for the Line
+  // generator specifically (only 2 profile points, 1 edge spanning the whole ribbon width) it broke
+  // outright — the quad connecting a turn's start to its end lands at the SAME angle (one full
+  // revolution later), so it rendered as a large flat plane slicing straight through the helix
+  // instead of tracking the ribbon's actual curve (v1.24.0 user report/screenshot: a big green
+  // plane where no such surface exists). Uses the render resolution (segs) instead, the same
+  // per-slice granularity slice rings already show — small enough for the flat-quad approximation
+  // to actually track the swept surface, and a genuine fabrication-relevant unit for a helical
+  // ribbon/stair stringer (small flat segments are literally how one would be built from stock).
   {
-    const loopCount = state.mode === 'helix' ? state.helixTurns : state.floors;
-    const stepM = state.mode === 'helix' ? state.helixPitchM : state.floorHeightM;
+    const loopCount = state.mode === 'helix' ? segs : state.floors;
+    const stepM = state.mode === 'helix' ? h/segs : state.floorHeightM;
     const { panels, maxWarpM } = computePanelWarp(profile, layerPointFn, n, closed, loopCount, stepM);
     document.getElementById('hudPanelWarp').textContent =
       toDisplaySmallLen(maxWarpM).toFixed(1) + ' ' + smallLenUnit();
