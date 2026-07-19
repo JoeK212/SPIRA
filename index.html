@@ -4,6 +4,44 @@ Interactive explorer of architectural deformation operations — twisting, taper
 Joe.K · axisbim.io
 
 CHANGELOG
+v1.50.0 - 2026-07-19 - Compound operations — apply a second deformation after the first (e.g. Twist
+         then Taper), the single biggest feature request this project has had. Motivation: every
+         rejected case study so far (Shanghai Tower, Absolute World, and in spirit Capital Gate) was
+         rejected for the SAME reason — the real building compounds two operations and SPIRA could
+         only ever do one. This closes that gap; Shanghai Tower (twist+taper) is now representable.
+         Mechanism: computeLayerPointCompound() wraps the existing, unmodified computeLayerPoint() —
+         runs the primary transform, and if state.compoundMode is set, feeds the result's [x,z] back
+         in at the SAME y through a second transform. This works because twist/taper/shear all return
+         [x, y, z] with y passed straight through unchanged (rotation/scaling/translation happen
+         entirely in the x/z plane at each height) — verified this against a manual hand-chained
+         computation (exact match) and against boundary conditions at y=0/y=h before relying on it.
+         Bend can only ever be the LAST step in a chain: its own output describes a point on a curved
+         world-space arc, not "how far up the original axis" anymore, so nothing can be chained after
+         it — enforced in three places (the wrapper's own safety check, the Compound picker hiding
+         itself with an explanatory note whenever primary=Bend, and the mode-switch handler), not
+         assumed to hold from the UI alone. FFD and Helix don't participate at all — neither fits the
+         "preserve y, transform x/z" model this relies on.
+         Replaced computeLayerPoint( with computeLayerPointCompound( at the 14 real call sites (mesh
+         construction, panel warp, the tolerance solver, CSV/loft-JSON export, the axis overlay) —
+         all of them already funnel through one or two spots in rebuild(), so every downstream
+         consumer became compound-aware for free, none individually touched or even aware compounding
+         exists. Volume falls back to the same numeric mesh integration FFD already used, since the
+         closed-form formulas (Cavalieri-preserved for twist/shear/bend, the quadratic formula for
+         taper) were each derived for a single operation and chaining genuinely changes the math
+         (Twist then Taper does scale volume, unlike Twist alone) without a new closed form being
+         worth deriving. New Compound section (mode picker + one compact parameter block per
+         secondary mode, sharing state fields with their primary counterparts since the picker never
+         allows the same mode to be both). Caught and fixed two real bugs before shipping: a
+         reference to a nonexistent FT_TO_M constant in the compound shear sliders that would have
+         thrown at first use, and the compound shear sliders' range staying stuck at a narrow static
+         default instead of matching the primary sliders' actual widened runtime range. Reset,
+         loading a case study, and switching primary to Bend/FFD/Helix or to whatever mode is
+         currently the compound choice all clear compoundMode, so it can't silently point at a
+         contradictory or stale configuration. Play/Pause and Compare both continue to work
+         unmodified — Play still only animates the primary's own parameter(s) for now (a disclosed
+         scope decision, not a gap), and Compare/localStorage/the shareable URL all pick up
+         compoundMode automatically since it's just one more field in `state`. Added 11 new
+         audit_deploy.js checks.
 v1.49.0 - 2026-07-19 - More case studies, per user request. Added the Leaning Tower of Pisa as
          Shear's first case study since Capital Gate was removed in v1.41.0 — height (~56m), lean
          angle (~3.97°), floor count (8), and base diameter (~15.5m) are all independently sourced,
@@ -1352,6 +1390,7 @@ v1.0.0 - 2026-07-17 - Initial build. Twist operation on four cross-section prese
       <div class="formula mono" id="hudFormula">α(z) = (z / h) · α<sub>max</sub></div>
       <div class="row"><span class="label" id="hudParam1Label">α_max</span><span class="val mono" id="hudParam1">0°</span></div>
       <div class="row"><span class="label" id="hudParam2Label">α at h/2</span><span class="val mono" id="hudParam2">0°</span></div>
+      <div class="row" id="hudCompoundRow" style="display:none;"><span class="label">then</span><span class="val mono" id="hudCompound">–</span></div>
       <div class="row"><span class="label">height (h)</span><span class="val mono" id="hudHeight">–</span></div>
       <div class="row"><span class="label" id="hudAreaLabel">base area</span><span class="val mono" id="hudArea">–</span></div>
       <div class="row"><span class="label" id="hudVolTwistLabel">deformed volume</span><span class="val mono" id="hudVolTwist">–</span></div>
@@ -1400,11 +1439,12 @@ v1.0.0 - 2026-07-17 - Initial build. Twist operation on four cross-section prese
         <button class="preset-btn" data-mode="bend">Bend</button>
         <button class="preset-btn" data-mode="ffd">Free</button>
         <button class="preset-btn" data-mode="helix">Helix</button>
+        <button class="preset-btn" data-mode="morph">Morph</button>
       </div>
     </section>
 
     <section class="group" id="crossSectionSection">
-      <h3>Cross-section (profile in plane B)</h3>
+      <h3 id="crossSectionHeading">Cross-section (profile in plane B)</h3>
       <div class="presets" id="presetGrid"></div>
       <div class="slider-row" style="margin-top:12px;">
         <div class="top"><span>width (x)</span><span class="val" id="footprintWidthVal">2.0 m</span></div>
@@ -1537,6 +1577,81 @@ v1.0.0 - 2026-07-17 - Initial build. Twist operation on four cross-section prese
           </div>
         </div>
         <button class="btn secondary reset-btn" data-resetmode="helix" style="width:100%; margin-top:6px;">Reset values</button>
+      </div>
+      <div id="morphParamsBlock" style="display:none;">
+        <div style="font-size:0.78rem; color:var(--muted); margin-bottom:8px;">
+          Blends the Cross-section shape above (FROM, at the base) into a second shape (TO, at the
+          top) linearly with height — the base's own footprint width/depth sliders above set the
+          FROM size; the sliders below set the TO size independently.
+        </div>
+        <div style="font-size:0.72rem; color:var(--muted); margin-bottom:6px;">To shape</div>
+        <div class="presets" id="morphToGrid" style="grid-template-columns:1fr 1fr 1fr; margin-bottom:12px;"></div>
+        <div class="slider-row">
+          <div class="top"><span>to width (x)</span><span class="val" id="morphToWidthVal">2.0 m</span></div>
+          <input type="range" id="morphToWidthSlider" min="0.5" max="40" step="0.1" value="2.0">
+        </div>
+        <div class="slider-row">
+          <div class="top"><span>to depth (z)</span><span class="val" id="morphToDepthVal">2.0 m</span></div>
+          <input type="range" id="morphToDepthSlider" min="0.5" max="40" step="0.1" value="2.0">
+        </div>
+        <button class="btn secondary reset-btn" data-resetmode="morph" style="width:100%; margin-top:6px;">Reset values</button>
+        <div style="font-size:0.78rem; color:var(--muted); margin:14px 0 8px;">
+          Case study (real shape-morphing building)
+        </div>
+        <button class="btn secondary" data-casestudy="lottesupertower" style="width:100%; font-size:0.74rem;">Lotte Super Tower</button>
+        <div style="font-size:0.68rem; line-height:1.4; margin-top:4px;" class="caveat">
+          Height and floor count are sourced (SOM, unbuilt 2008 design); base/top plan dimensions
+          are sourced directly from SOM's own project description.
+        </div>
+      </div>
+      <div id="compoundSection">
+        <div style="font-size:0.78rem; color:var(--muted); margin:14px 0 8px;">
+          Compound — apply a second operation after this one
+        </div>
+        <div class="presets" id="compoundGrid" style="grid-template-columns:1fr 1fr 1fr 1fr 1fr;">
+          <button class="preset-btn active" data-compound="">None</button>
+          <button class="preset-btn" data-compound="twist">Twist</button>
+          <button class="preset-btn" data-compound="taper">Taper</button>
+          <button class="preset-btn" data-compound="shear">Shear</button>
+          <button class="preset-btn" data-compound="bend">Bend</button>
+        </div>
+        <div id="compoundBendUnavailableNote" style="font-size:0.68rem; color:var(--muted); line-height:1.4; margin-top:6px; display:none;">
+          Bend can only be the LAST step in a chain — its own output no longer describes "how far up
+          the original axis" a point is, so nothing can be chained after it. Switch the primary
+          Operation above to compound something before a bend.
+        </div>
+        <div id="compoundTwistBlock" style="display:none; margin-top:8px;">
+          <div class="slider-row">
+            <div class="top"><span>then α_max (twist)</span><span class="val" id="compoundAlphaVal">120°</span></div>
+            <input type="range" id="compoundAlphaSlider" min="-720" max="720" step="1" value="120">
+          </div>
+        </div>
+        <div id="compoundTaperBlock" style="display:none; margin-top:8px;">
+          <div class="slider-row">
+            <div class="top"><span>then v (x-scale @ top)</span><span class="val" id="compoundTaperVVal">0.50</span></div>
+            <input type="range" id="compoundTaperVSlider" min="0.1" max="3" step="0.01" value="0.5">
+          </div>
+          <div class="slider-row">
+            <div class="top"><span>then w (z-scale @ top)</span><span class="val" id="compoundTaperWVal">0.50</span></div>
+            <input type="range" id="compoundTaperWSlider" min="0.1" max="3" step="0.01" value="0.5">
+          </div>
+        </div>
+        <div id="compoundShearBlock" style="display:none; margin-top:8px;">
+          <div class="slider-row">
+            <div class="top"><span>then Δx (shear)</span><span class="val" id="compoundShearDXVal">3.0 m</span></div>
+            <input type="range" id="compoundShearDXSlider" min="-8" max="8" step="0.1" value="3">
+          </div>
+          <div class="slider-row">
+            <div class="top"><span>then Δy (shear)</span><span class="val" id="compoundShearDYVal">1.0 m</span></div>
+            <input type="range" id="compoundShearDYSlider" min="-8" max="8" step="0.1" value="1">
+          </div>
+        </div>
+        <div id="compoundBendBlock" style="display:none; margin-top:8px;">
+          <div class="slider-row">
+            <div class="top"><span>then β_max (bend)</span><span class="val" id="compoundBendBetaVal">180°</span></div>
+            <input type="range" id="compoundBendBetaSlider" min="-360" max="360" step="1" value="180">
+          </div>
+        </div>
       </div>
       <div id="commonHeightBlock">
         <div class="slider-row">
@@ -1724,7 +1839,7 @@ v1.0.0 - 2026-07-17 - Initial build. Twist operation on four cross-section prese
 <script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
 <script src="https://cdn.jsdelivr.net/npm/three@0.128.0/examples/js/controls/OrbitControls.js"></script>
 <script>
-const APP_VERSION = '1.49.0';
+const APP_VERSION = '1.50.0';
 
 // ---------- toast ----------
 let toastTimer=null;
@@ -1780,6 +1895,14 @@ const HELP_HTML = `
   cross-section: Twist, Taper, Shear, Bend, Free (freeform/FFD), and Helix. Each has its own
   parameters below the switcher — the Reference panel at the bottom of the sidebar explains the
   math and the book figure each one is drawn from.</p>
+
+  <h4>Compound</h4>
+  <p>Applies a SECOND operation after the primary one — e.g. Twist then Taper. The picker only offers
+  modes different from whatever's currently primary, and Bend can only ever be the last step in a
+  chain (nothing can be chained after it, since a bent axis no longer describes "how far up the
+  original axis" a point is). Free and Helix don't support compounding at all. Play/Pause still only
+  animates the primary operation's own parameter(s); Reset, loading a case study, or switching to a
+  mode that doesn't support a second step all clear the compound choice.</p>
 
   <h4>Cross-section &amp; size</h4>
   <p>Pick a footprint preset (square, triangle, hexagon, star) and set real-world Width/Depth —
@@ -1899,6 +2022,13 @@ document.getElementById('footVersion').innerHTML =
 // ---------- state ----------
 const state = {
   mode: 'twist',          // 'twist' | 'taper' | 'shear' | 'bend' | 'ffd' | 'helix'
+  // v1.50.0: optional SECOND operation applied after the primary one — null | 'twist' | 'taper' |
+  // 'shear' | 'bend'. Only valid when `mode` is itself one of twist/taper/shear (never 'bend',
+  // 'ffd', or 'helix' — see computeLayerPointCompound below for exactly why bend can only ever be
+  // last in a chain, and ffd/helix don't fit this model at all). UI enforces this constraint by
+  // construction (the Compound section is hidden whenever mode is ffd/helix/bend, and its own
+  // options exclude whichever mode is currently primary) rather than validating it after the fact.
+  compoundMode: null,
   preset: 'square',
   // Real-world footprint size, independent per axis, applied on top of whichever preset's raw shape
   // is selected: PROFILES generates each preset at its own natural "unit" proportions (e.g. the
@@ -1928,6 +2058,12 @@ const state = {
   helixROuterM: 2.2,       // 'line' generator: outer radius
   helixTubeRM: 0.25,       // 'circle' generator: tube radius
   helixTubeOffsetM: 1.5,   // 'circle' generator: distance from axis to tube center
+  // Morph: blends the Cross-section preset above (FROM, at the base) into a second preset (TO, at
+  // the top) — see buildMorphProfile(). TO gets its own independent real-world size, same pattern
+  // as footprintWidthM/DepthM for FROM.
+  morphToPreset: 'ellipse',
+  morphToWidthM: 2.0,
+  morphToDepthM: 2.0,
   units: 'metric',       // 'metric' | 'imperial' — display only; geometry is always stored in meters
   projection: 'perspective', // v1.38.0: 'perspective' | 'orthographic' — Top/Front/Home were true
                               // to their view DIRECTION but still perspective-projected, so even a
@@ -2091,6 +2227,65 @@ function scaledProfile(presetKey, widthM, depthM){
   return raw.map(p => [p[0]*scaleX, p[1]*scaleZ]);
 }
 
+// ---------- Morph mode helpers (v1.51.0) ----------
+// Finds where a ray from the origin along `dir` crosses polygon `poly` (assumed star-shaped from
+// the origin — true of every PROFILES shape by construction). Standard 2-line intersection: ray
+// R(t)=t*dir (t>0) vs segment S(s)=a+s*(b-a) (s in [0,1]), solved as a 2x2 linear system. Returns
+// the smallest positive t (the polygon's radius in that direction) or null if no edge is crossed
+// (shouldn't happen for a star-shaped closed polygon, but a caller-side guard is cheap insurance).
+function polygonRadiusAtAngle(poly, dir){
+  const n = poly.length;
+  let best = null;
+  for(let i=0;i<n;i++){
+    const a = poly[i], b = poly[(i+1)%n];
+    const ex = b[0]-a[0], ez = b[1]-a[1];
+    const det = ex*dir[1] - ez*dir[0];
+    if(Math.abs(det) < 1e-12) continue; // edge parallel to the ray
+    const t = (ex*a[1] - ez*a[0]) / det;
+    const s = (dir[0]*a[1] - dir[1]*a[0]) / det;
+    if(t > 1e-9 && s >= -1e-9 && s <= 1+1e-9){
+      if(best===null || t<best) best = t;
+    }
+  }
+  return best;
+}
+// Resamples a (scaled, origin-centered) polygon to exactly N points at evenly spaced angles around
+// the origin, via ray-casting (above) rather than arc-length walking — angle-based correspondence
+// is what keeps two DIFFERENT shapes (e.g. a square and a circle) from twisting against each other
+// when blended point-for-point: point i of both resampled shapes sits at the same angle, always,
+// so a Morph's mid-blend never has to guess which corner of the square "becomes" which point of
+// the circle. startAngle matches the -90°/top-of-screen reference most PROFILES generators already
+// use, so a resampled square's first point still lands near its real top-left-ish corner rather
+// than an arbitrary rotation.
+function resampleProfileByAngle(poly, N, startAngle){
+  startAngle = startAngle === undefined ? -Math.PI/2 : startAngle;
+  const pts = [];
+  for(let i=0;i<N;i++){
+    const angle = startAngle + i*2*Math.PI/N;
+    const dir = [Math.cos(angle), Math.sin(angle)];
+    const r = polygonRadiusAtAngle(poly, dir) || 0;
+    pts.push([r*dir[0], r*dir[1]]);
+  }
+  return pts;
+}
+// Fixed resample resolution for Morph — matches Ellipse's own generator density (v1 scope note:
+// not user-exposed as a slider, unlike panel subdivision/loft profile count, to keep this release
+// bounded; see MORPH scope note in the changelog).
+const MORPH_N = 32;
+// Builds Morph's "profile" array: N points, each a 4-tuple [fromX, fromZ, toX, toZ] rather than
+// the [x,z] pair every other mode uses. This is what lets Morph slot into the EXISTING
+// buildDeformedGeometry/computeLayerPoint pipeline unmodified at nearly every call site — anywhere
+// that reads p[0]/p[1] directly (bottom cap triangulation, footprint area, point labels, the axis
+// overlay) automatically sees the FROM shape, which is exactly correct since those all evaluate at
+// y=0. Only computeLayerPoint's own 'morph' branch needs to know about p[2]/p[3] at all.
+function buildMorphProfile(){
+  const fromScaled = scaledProfile(state.preset, state.footprintWidthM, state.footprintDepthM);
+  const toScaled = scaledProfile(state.morphToPreset, state.morphToWidthM, state.morphToDepthM);
+  const fromR = resampleProfileByAngle(fromScaled, MORPH_N);
+  const toR = resampleProfileByAngle(toScaled, MORPH_N);
+  return fromR.map((p,i) => [ p[0], p[1], toR[i][0], toR[i][1] ]);
+}
+
 // shoelace area of a simple polygon (2D)
 function polygonArea(pts){
   let a=0;
@@ -2251,9 +2446,60 @@ function computeLayerPoint(mode, params, y, h, p){
     const worldY = p[1] + params.riseParRad*uAngle;
     return [worldX, worldY, worldZ];
   }
+  if(mode === 'morph'){
+    // p = [fromX, fromZ, toX, toZ] (see buildMorphProfile) — a straight lerp per level, height-
+    // linear same as Taper/Shear's own primary parameter. subdivideProfileForPanels' generic
+    // element-wise interpolation (v1.51.0) keeps this 4-tuple shape intact even for the finer
+    // panel-subdivision points it generates, so panel warp and higher-res exports blend correctly
+    // too, not just the named corners.
+    const t = y/h;
+    return [ p[0] + (p[2]-p[0])*t, y, p[1] + (p[3]-p[1])*t ];
+  }
   const angleDeg = (y/h) * params.alphaMax;
   const [x,z] = rotate2D(p, angleDeg * Math.PI/180);
   return [x, y, z];
+}
+
+// Build the {V,W}/{DX,DY}/{betaMax}/{alphaMax} params object computeLayerPoint expects for any of
+// the four axis-based modes, given just the mode name — factored out of rebuild()'s own inline
+// ternary (v1.50.0) so the SAME mapping is used for both the primary operation and, when compounding
+// is active, the secondary one, rather than risking the two drifting out of sync if only one copy
+// ever got updated. Deliberately doesn't cover 'ffd' (its params also need `box`/`h`, computed at the
+// call site) or 'helix' (an entirely different params shape) — neither participates in compounding.
+function paramsForMode(mode){
+  return mode === 'taper' ? { V: state.taperV, W: state.taperW }
+    : mode === 'shear' ? { DX: state.shearDXM, DY: state.shearDYM }
+    : mode === 'bend' ? { betaMax: state.bendBetaMax }
+    : { alphaMax: state.alphaMax }; // twist
+}
+
+// v1.50.0: compound operations — apply state.compoundMode's transform AFTER the primary one, so e.g.
+// Twist then Taper becomes possible (Shanghai Tower's actual geometry, among others — see the
+// CASE_STUDIES rejection notes for how many real buildings turned out to need exactly this). A thin
+// wrapper around computeLayerPoint rather than a change to it, and used as a drop-in replacement at
+// every one of computeLayerPoint's existing call sites (mesh construction, panel warp, the tolerance
+// solver, CSV/loft-JSON export, point labels, the axis overlay) — all of those already funnel through
+// either buildDeformedGeometry or lastBuild.evalPoint, both fed from a single call site in rebuild(),
+// so switching that one spot to this wrapper makes every downstream consumer compound-aware for free,
+// with zero of them individually touched or even aware compounding exists.
+//
+// Only ever applies when `mode` is twist/taper/shear — never 'bend', 'ffd', or 'helix', even if
+// state.compoundMode somehow ended up set while one of those was primary (shouldn't be reachable;
+// the UI enforces it, but this is the actual safety boundary, not the UI). The reason bend can't
+// chain FURTHER: twist/taper/shear all return [x, y, z] with the SAME y that was passed in (rotation/
+// scaling/translation happen entirely in the x/z plane at each height) — so their output x/z, fed
+// back in at the SAME y, is exactly the right input for a second transform. Bend does not preserve
+// this: its own y/z output describes a point on a curved arc in world space, not "how far up the
+// original straight axis" anymore, so there's no way to feed it into a second axis-based transform
+// using this same y-preserving scheme. Bend can still be the LAST step (any of twist/taper/shear's
+// preserved-y output feeds into it correctly), just never followed by anything after.
+function computeLayerPointCompound(mode, params, y, h, p){
+  const out = computeLayerPoint(mode, params, y, h, p);
+  if(state.compoundMode && mode !== 'helix' && mode !== 'ffd' && mode !== 'bend' && mode !== 'morph'){
+    const secondaryParams = paramsForMode(state.compoundMode);
+    return computeLayerPoint(state.compoundMode, secondaryParams, y, h, [out[0], out[2]]);
+  }
+  return out;
 }
 
 // ---------- units ----------
@@ -2580,7 +2826,10 @@ function subdivideProfileForPanels(profile, n, closed, subPerEdge){
     const p0 = profile[i], p1 = profile[i2];
     for(let s=0; s<subPerEdge; s++){
       const t = s/subPerEdge;
-      subProfile.push([ p0[0]+(p1[0]-p0[0])*t, p0[1]+(p1[1]-p0[1])*t ]);
+      // Element-wise (not hardcoded to [0]/[1]) so Morph's [fromX,fromZ,toX,toZ] 4-tuples (v1.51.0)
+      // interpolate correctly too — every other mode's plain [x,z] pairs behave identically to
+      // before, since mapping 2 elements is the same result the old hardcoded version gave.
+      subProfile.push(p0.map((v,k) => v + (p1[k]-v)*t));
     }
   }
   if(!closed) subProfile.push(profile[n-1]); // open profiles (Helix Line) need the final endpoint too
@@ -2657,7 +2906,7 @@ function buildDeformedGeometry(profile, height, segs, mode, params, smoothCrossS
   for(let j=0; j<=segs; j++){
     const y = (j/segs) * height;
     for(let i=0;i<n;i++){
-      const [x,yOut,z] = computeLayerPoint(mode, params, y, height, profile[i]);
+      const [x,yOut,z] = computeLayerPointCompound(mode, params, y, height, profile[i]);
       layerPositions.push(x, yOut, z);
     }
   }
@@ -2682,14 +2931,14 @@ function buildDeformedGeometry(profile, height, segs, mode, params, smoothCrossS
       const yLo = Math.max(0, y-dY), yHi = Math.min(height, y+dY);
       const denom = (yHi - yLo) || dY;
       for(let i=0;i<n;i++){
-        const [x,yOut,z] = computeLayerPoint(mode, params, y, height, profile[i]);
+        const [x,yOut,z] = computeLayerPointCompound(mode, params, y, height, profile[i]);
         positions.push(x, yOut, z);
-        const pLo = computeLayerPoint(mode, params, yLo, height, profile[i]);
-        const pHi = computeLayerPoint(mode, params, yHi, height, profile[i]);
+        const pLo = computeLayerPointCompound(mode, params, yLo, height, profile[i]);
+        const pHi = computeLayerPointCompound(mode, params, yHi, height, profile[i]);
         const tHeight = [ (pHi[0]-pLo[0])/denom, (pHi[1]-pLo[1])/denom, (pHi[2]-pLo[2])/denom ];
         const iPrev = (i-1+n)%n, iNext = (i+1)%n;
-        const pPrev = computeLayerPoint(mode, params, y, height, profile[iPrev]);
-        const pNext = computeLayerPoint(mode, params, y, height, profile[iNext]);
+        const pPrev = computeLayerPointCompound(mode, params, y, height, profile[iPrev]);
+        const pNext = computeLayerPointCompound(mode, params, y, height, profile[iNext]);
         const tGen = [ pNext[0]-pPrev[0], pNext[1]-pPrev[1], pNext[2]-pPrev[2] ];
         // Orientation verified headlessly (Node + three.js) before shipping — same cross order as
         // the faceted path below (height-tangent × generator-tangent), since this path shares that
@@ -2729,8 +2978,8 @@ function buildDeformedGeometry(profile, height, segs, mode, params, smoothCrossS
       const panelBase = positions.length / 3;
       for(let j=0; j<=segs; j++){
         const y = (j/segs) * height;
-        const left  = computeLayerPoint(mode, params, y, height, profile[i]);
-        const right = computeLayerPoint(mode, params, y, height, profile[iN]);
+        const left  = computeLayerPointCompound(mode, params, y, height, profile[i]);
+        const right = computeLayerPointCompound(mode, params, y, height, profile[iN]);
 
         // Width tangent (∂S/∂u): exact, not approximated — a panel is a ruled straight-line surface
         // between two corners at any given height, so its width-direction derivative is just the
@@ -2740,11 +2989,11 @@ function buildDeformedGeometry(profile, height, segs, mode, params, smoothCrossS
         // Height tangent (∂S/∂v) per column, central difference (one-sided at the two ends).
         const yLo = Math.max(0, y-dY), yHi = Math.min(height, y+dY);
         const denom = (yHi - yLo) || dY;
-        const lLo = computeLayerPoint(mode, params, yLo, height, profile[i]);
-        const lHi = computeLayerPoint(mode, params, yHi, height, profile[i]);
+        const lLo = computeLayerPointCompound(mode, params, yLo, height, profile[i]);
+        const lHi = computeLayerPointCompound(mode, params, yHi, height, profile[i]);
         const tvL = [ (lHi[0]-lLo[0])/denom, (lHi[1]-lLo[1])/denom, (lHi[2]-lLo[2])/denom ];
-        const rLo = computeLayerPoint(mode, params, yLo, height, profile[iN]);
-        const rHi = computeLayerPoint(mode, params, yHi, height, profile[iN]);
+        const rLo = computeLayerPointCompound(mode, params, yLo, height, profile[iN]);
+        const rHi = computeLayerPointCompound(mode, params, yHi, height, profile[iN]);
         const tvR = [ (rHi[0]-rLo[0])/denom, (rHi[1]-rLo[1])/denom, (rHi[2]-rLo[2])/denom ];
 
         // Outward normal = tangent-height × tangent-width — this ordering (not the reverse) is what
@@ -2782,7 +3031,7 @@ function buildDeformedGeometry(profile, height, segs, mode, params, smoothCrossS
   function buildCap(y, flip){
     const capPos = [];
     profile.forEach(p=>{
-      const [x,yOut,z] = computeLayerPoint(mode, params, y, height, p);
+      const [x,yOut,z] = computeLayerPointCompound(mode, params, y, height, p);
       capPos.push(x, yOut, z);
     });
     const capIdx = [];
@@ -3011,20 +3260,25 @@ function rebuild(){
     layerPositions = built.layerPositions; segs = built.segs; n = built.n;
     box = null;
   } else {
-    profile = scaledProfile(state.preset, state.footprintWidthM, state.footprintDepthM);
+    // Morph's profile is [fromX,fromZ,toX,toZ] 4-tuples (buildMorphProfile) rather than scaledProfile's
+    // plain [x,z] — everything downstream (box/params below) only ever reads p[0]/p[1], which for
+    // Morph is exactly the FROM shape, so it stays correct without special-casing here.
+    profile = state.mode === 'morph' ? buildMorphProfile() : scaledProfile(state.preset, state.footprintWidthM, state.footprintDepthM);
     box = {
       minX: Math.min(...profile.map(p=>p[0])), maxX: Math.max(...profile.map(p=>p[0])),
       minZ: Math.min(...profile.map(p=>p[1])), maxZ: Math.max(...profile.map(p=>p[1]))
     };
-    params = state.mode === 'taper' ? { V: state.taperV, W: state.taperW }
-      : state.mode === 'shear' ? { DX: state.shearDXM, DY: state.shearDYM }
-      : state.mode === 'bend' ? { betaMax: state.bendBetaMax }
-      : state.mode === 'ffd' ? { box, cps: ffdControlPoints(box, h, state.ffdOffsets) }
-      : { alphaMax: state.alphaMax };
+    params = state.mode === 'ffd' ? { box, cps: ffdControlPoints(box, h, state.ffdOffsets) } : paramsForMode(state.mode);
     const modeForPoint = state.mode, paramsForPoint = params;
-    layerPointFn = (y, p) => computeLayerPoint(modeForPoint, paramsForPoint, y, h, p);
+    layerPointFn = (y, p) => computeLayerPointCompound(modeForPoint, paramsForPoint, y, h, p);
+    // Morph checks BOTH ends for a round preset (Ellipse), not just state.preset — the smooth-
+    // normal path reads more naturally on a round endpoint even at the cost of slightly softening
+    // the other end's true corners at this resample density (v1.51.0 scope note).
+    const smoothXSection = state.mode === 'morph'
+      ? !!(PRESET_SMOOTH[state.preset] || PRESET_SMOOTH[state.morphToPreset])
+      : !!PRESET_SMOOTH[state.preset];
     ({ sideGeo, bottomCap, topCap, layerPositions, segs, n } = buildDeformedGeometry(
-      profile, h, state.segments, state.mode, params, !!PRESET_SMOOTH[state.preset]
+      profile, h, state.segments, state.mode, params, smoothXSection
     ));
   }
 
@@ -3196,7 +3450,10 @@ function rebuild(){
     // v1.23.0: scales with footprintExtent instead, since an arrowhead's job is to read as a small
     // marker against the building's own width, not its height.
     const coneR = Math.max(footprintExtent*0.03, 0.06), coneH = coneR * 3.3;
-    if(state.mode === 'shear' || state.mode === 'bend'){
+    // v1.50.0: also draw A/A1 when the SECONDARY compound operation moves the axis, even if the
+    // primary one (twist/taper) doesn't — e.g. Twist then Shear still leans the axis away from A.
+    const axisMoves = mode => mode === 'shear' || mode === 'bend';
+    if(axisMoves(state.mode) || axisMoves(state.compoundMode)){
       const aGeo = new THREE.BufferGeometry().setFromPoints([
         new THREE.Vector3(0,0,0), new THREE.Vector3(0, axisTop, 0)
       ]);
@@ -3205,13 +3462,15 @@ function rebuild(){
       aLine.computeLineDistances();
       overlayGroup.add(aLine);
 
-      // A1: for shear this is exactly 2 points (it's provably straight); for bend, sample the
-      // curve — computeLayerPoint at the on-axis point [0,0] gives A1 for any mode generically.
-      const sampleCount = state.mode === 'bend' ? 48 : 1;
+      // A1: exactly 2 points when nothing bends the axis (still provably straight even compounded —
+      // twist/taper/shear all move [0,0] linearly in y); sample the curve whenever bend is anywhere
+      // in the chain — computeLayerPointCompound at the on-axis point [0,0] gives A1 for any mode or
+      // compound combination generically, so this needs no special-casing beyond which count to use.
+      const sampleCount = (state.mode === 'bend' || state.compoundMode === 'bend') ? 48 : 1;
       const a1Points = [];
       for(let k=0; k<=sampleCount; k++){
         const y = (k/sampleCount) * axisTop;
-        const [ax,ay,az] = computeLayerPoint(state.mode, params, y, h, [0,0]);
+        const [ax,ay,az] = computeLayerPointCompound(state.mode, params, y, h, [0,0]);
         a1Points.push(new THREE.Vector3(ax, ay, az));
       }
       const a1Geo = new THREE.BufferGeometry().setFromPoints(a1Points);
@@ -3550,7 +3809,12 @@ function rebuild(){
     document.getElementById('hudVolStraightLabel').textContent = 'prism volume';
 
     const baseArea = polygonArea(profile);
-    const volDeformed = state.mode === 'ffd'
+    // v1.50.0: computeDeformedVolume's closed forms (Cavalieri-preserved for twist/shear/bend, the
+    // quadratic formula for taper) were each derived for a SINGLE operation — chaining two changes
+    // the actual math (e.g. Twist then Taper does scale volume, unlike Twist alone) without a new
+    // closed form being worth deriving, so this falls back to the same numeric mesh integration FFD
+    // already uses whenever compounding is active, regardless of which two operations are chained.
+    const volDeformed = (state.mode === 'ffd' || state.mode === 'morph' || state.compoundMode)
       ? computeMeshVolume(sideGeo, bottomCap, topCap)
       : computeDeformedVolume(state.mode, params, baseArea, h);
     const volPrism = baseArea * h;
@@ -3578,11 +3842,23 @@ function rebuild(){
       document.getElementById('hudParam1').textContent = '(1,1,1) trilinear';
       document.getElementById('hudParam2Label').textContent = 'max handle offset';
       document.getElementById('hudParam2').textContent = toDisplayLen(maxOffset).toFixed(1) + ' ' + u.len;
+    } else if(state.mode === 'morph'){
+      document.getElementById('hudParam1Label').textContent = 'from shape';
+      document.getElementById('hudParam1').textContent = PRESET_LABELS[state.preset];
+      document.getElementById('hudParam2Label').textContent = 'to shape';
+      document.getElementById('hudParam2').textContent = PRESET_LABELS[state.morphToPreset];
     } else {
       document.getElementById('hudParam1Label').textContent = 'α_max';
       document.getElementById('hudParam1').textContent = state.alphaMax.toFixed(0) + '°';
       document.getElementById('hudParam2Label').textContent = 'α at h/2';
       document.getElementById('hudParam2').textContent = (state.alphaMax/2).toFixed(1) + '°';
+    }
+    const hudCompoundRow = document.getElementById('hudCompoundRow');
+    if(state.compoundMode){
+      hudCompoundRow.style.display = '';
+      document.getElementById('hudCompound').textContent = modeParamSummary(state.compoundMode);
+    } else {
+      hudCompoundRow.style.display = 'none';
     }
     document.getElementById('hudHeight').textContent = toDisplayLen(h).toFixed(1) + ' ' + u.len;
     document.getElementById('hudArea').textContent = toDisplayArea(baseArea).toFixed(2) + ' ' + u.area;
@@ -3608,17 +3884,20 @@ function rebuild(){
   // runs when pendingReframe is true, so it alone is responsible for target now — consistent with
   // camera position/distance, which likewise only move on an actual reframe, never on a plain
   // slider drag or toggle.
-  const paramSummary = state.mode === 'taper'
-    ? `Taper v${state.taperV.toFixed(2)} w${state.taperW.toFixed(2)}`
-    : state.mode === 'shear'
-    ? `Shear Δx${toDisplayLen(state.shearDXM).toFixed(1)}${u.len} Δy${toDisplayLen(state.shearDYM).toFixed(1)}${u.len}`
-    : state.mode === 'bend'
-    ? `Bend β_max ${state.bendBetaMax}°`
-    : state.mode === 'ffd'
+  // Factored out so the same short-form text works for the primary operation (as before) and, when
+  // compounding, the secondary one too — one formatting rule instead of two copies to keep in sync.
+  function modeParamSummary(mode){
+    return mode === 'taper' ? `Taper v${state.taperV.toFixed(2)} w${state.taperW.toFixed(2)}`
+      : mode === 'shear' ? `Shear Δx${toDisplayLen(state.shearDXM).toFixed(1)}${u.len} Δy${toDisplayLen(state.shearDYM).toFixed(1)}${u.len}`
+      : mode === 'bend' ? `Bend β_max ${state.bendBetaMax}°`
+      : mode === 'morph' ? `Morph ${PRESET_LABELS[state.preset]}→${PRESET_LABELS[state.morphToPreset]}`
+      : `Twist α_max ${state.alphaMax}°`;
+  }
+  const paramSummary = state.mode === 'ffd'
     ? `Free (1,1,1) FFD`
     : state.mode === 'helix'
     ? `Helix ${state.helixGenerator} ${state.helixTurns}× p${toDisplayLen(state.helixPitchM).toFixed(1)}${u.len}`
-    : `Twist α_max ${state.alphaMax}°`;
+    : modeParamSummary(state.mode) + (state.compoundMode ? ` → then ${modeParamSummary(state.compoundMode)}` : '');
   const helixGenFooterLabel = { line:'Line generator', circle:'Circle generator', pipe:'Pipe generator' }[state.helixGenerator];
   document.getElementById('footRight').textContent = state.mode === 'helix'
     ? `${helixGenFooterLabel} · ${paramSummary} · ${state.helixTurns} turns · h ${toDisplayLen(h).toFixed(1)}${u.len} · ${segs} segments`
@@ -3651,6 +3930,23 @@ Object.keys(PROFILES).forEach(key=>{
   presetGrid.appendChild(btn);
 });
 
+const morphToGrid = document.getElementById('morphToGrid');
+Object.keys(PROFILES).forEach(key=>{
+  const btn = document.createElement('button');
+  btn.className = 'preset-btn' + (state.morphToPreset===key ? ' active':'');
+  btn.textContent = PRESET_LABELS[key];
+  btn.dataset.morphto = key;
+  btn.addEventListener('click', ()=>{
+    state.morphToPreset = key;
+    [...morphToGrid.children].forEach(c=>c.classList.remove('active'));
+    btn.classList.add('active');
+    pendingReframe = true;
+    persist(); rebuild();
+    toast('To shape: ' + PRESET_LABELS[key]);
+  });
+  morphToGrid.appendChild(btn);
+});
+
 const alphaSlider = document.getElementById('alphaSlider');
 const taperVSlider = document.getElementById('taperVSlider');
 const taperWSlider = document.getElementById('taperWSlider');
@@ -3669,6 +3965,8 @@ const helixTubeRSlider = document.getElementById('helixTubeRSlider');
 const helixTubeOffsetSlider = document.getElementById('helixTubeOffsetSlider');
 const footprintWidthSlider = document.getElementById('footprintWidthSlider');
 const footprintDepthSlider = document.getElementById('footprintDepthSlider');
+const morphToWidthSlider = document.getElementById('morphToWidthSlider');
+const morphToDepthSlider = document.getElementById('morphToDepthSlider');
 const panelSubdivSlider = document.getElementById('panelSubdivSlider');
 const toleranceTargetSlider = document.getElementById('toleranceTargetSlider');
 alphaSlider.value = state.alphaMax;
@@ -3741,6 +4039,17 @@ const REFERENCE_TEXT = {
     viewport to reshape it live. This looks like it should stay linear too, but a straight line not
     parallel to an edge becomes a cubic curve, and volume changes however the control points move —
     there's no guarantee of preservation the way there is for twist, shear, and bend.`,
+  morph: `Morph is a different construction from the other operations: instead of moving a single
+    fixed cross-section, it blends TWO different shapes together — the FROM shape at the base, the TO
+    shape at the top — point for point, linearly with height. Both shapes are resampled to the same
+    point count at evenly spaced angles around the vertical axis before blending, so corresponding
+    points always sit at the same angle in both shapes (a square's corner and a circle's nearest
+    point at that angle, for instance), which is what keeps the blend from twisting against itself.
+    Because the cross-section's own shape changes, not just its size, position, or rotation, there's
+    no closed-form volume the way twist/shear/bend have — the volume shown is measured directly off
+    the built mesh, same as Free. Try Square → Ellipse for the classic "square base, round top"
+    silhouette (SOM's Lotte Super Tower case study), or push the two To-size sliders far apart from
+    the base's own footprint sliders for a shape that narrows or widens as it morphs.`,
   helix: `Helix is a different construction from the other five, which all deform a solid — here a
     generator curve is swept by true helical motion: rotate by u about axis A while translating p·u
     along it (x=X(v)cosu, z=X(v)sinu, y=Y(v)+p·u). "Line" sweeps a straight segment orthogonal to A —
@@ -3758,7 +4067,8 @@ const FORMULA_HTML = {
   shear: 'x₁=x+Δx·(z/h), y₁=y+Δy·(z/h)',
   bend: 'R=h/β, θ(z)=β·(z/h)',
   ffd: 'b(u,v,w) = Σ B<sub>i</sub>(u)B<sub>j</sub>(v)B<sub>k</sub>(w)·b<sub>ijk</sub>',
-  helix: 'x=X(v)cosu, z=X(v)sinu, y=Y(v)+p·u'
+  helix: 'x=X(v)cosu, z=X(v)sinu, y=Y(v)+p·u',
+  morph: 'P(z) = P_from + (z/h)·(P_to − P_from)'
 };
 const HUD_FORMULA_HTML = {
   twist: 'α(z) = (z / h) · α<sub>max</sub>',
@@ -3766,26 +4076,38 @@ const HUD_FORMULA_HTML = {
   shear: 'x₁ = x + Δx·(z/h)',
   bend: 'θ(z) = β · (z/h), R = h/β',
   ffd: 'trilinear blend of 8 control points',
-  helix: 'helical sweep of generator m(v)'
+  helix: 'helical sweep of generator m(v)',
+  morph: 'lerp(shape_from, shape_to, z/h)'
 };
-const TAGLINES = { twist: 'twist deformation, live', taper: 'taper deformation, live', shear: 'shear deformation, live', bend: 'bend deformation, live', ffd: 'freeform deformation, live', helix: 'helical sweep, live' };
-const MODE_LABEL = { twist:'Twist', taper:'Taper', shear:'Shear', bend:'Bend', ffd:'Free', helix:'Helix' };
+const TAGLINES = { twist: 'twist deformation, live', taper: 'taper deformation, live', shear: 'shear deformation, live', bend: 'bend deformation, live', ffd: 'freeform deformation, live', helix: 'helical sweep, live', morph: 'shape morph, live' };
+const MODE_LABEL = { twist:'Twist', taper:'Taper', shear:'Shear', bend:'Bend', ffd:'Free', helix:'Helix', morph:'Morph' };
 
 const modeGrid = document.getElementById('modeGrid');
+function updateReferenceText(){
+  const base = REFERENCE_TEXT[state.mode];
+  const compoundNote = state.compoundMode
+    ? ` Compounded: this shape is the result above, THEN run through ${MODE_LABEL[state.compoundMode]}'s own operation as a second pass — the same math, just applied twice in sequence.`
+    : '';
+  document.getElementById('referenceText').textContent = base + compoundNote;
+}
 function applyModeChrome(){
   document.getElementById('modeTagline').textContent = TAGLINES[state.mode];
   document.getElementById('formulaBadge').innerHTML = FORMULA_HTML[state.mode];
   document.getElementById('hudFormula').innerHTML = HUD_FORMULA_HTML[state.mode];
-  document.getElementById('referenceText').textContent = REFERENCE_TEXT[state.mode];
+  updateReferenceText();
   document.getElementById('twistParamsBlock').style.display = state.mode === 'twist' ? '' : 'none';
   document.getElementById('taperParamsBlock').style.display = state.mode === 'taper' ? '' : 'none';
   document.getElementById('shearParamsBlock').style.display = state.mode === 'shear' ? '' : 'none';
   document.getElementById('bendParamsBlock').style.display = state.mode === 'bend' ? '' : 'none';
   document.getElementById('ffdParamsBlock').style.display = state.mode === 'ffd' ? '' : 'none';
   document.getElementById('helixParamsBlock').style.display = state.mode === 'helix' ? '' : 'none';
+  document.getElementById('morphParamsBlock').style.display = state.mode === 'morph' ? '' : 'none';
   // Helix has no cross-section footprint and no floors — swap those blocks for its own turns/pitch
   // block, and reuse the "Floor lines" toggle's label text as "Turn lines" while in this mode.
   document.getElementById('crossSectionSection').style.display = state.mode === 'helix' ? 'none' : '';
+  document.getElementById('crossSectionHeading').textContent = state.mode === 'morph'
+    ? 'Cross-section — FROM shape (base)'
+    : 'Cross-section (profile in plane B)';
   document.getElementById('commonHeightBlock').style.display = state.mode === 'helix' ? 'none' : '';
   document.getElementById('helixHeightBlock').style.display = state.mode === 'helix' ? '' : 'none';
   document.getElementById('floorLinesLabel').textContent = state.mode === 'helix' ? 'Turn lines (per revolution)' : 'Floor lines (per floor)';
@@ -3795,12 +4117,16 @@ function applyModeChrome(){
     [...document.getElementById('helixGenGrid').children].forEach(b=>b.classList.toggle('active', b.dataset.helixgen === state.helixGenerator));
   }
   [...modeGrid.children].forEach(b=>b.classList.toggle('active', b.dataset.mode === state.mode));
+  applyCompoundUI();
 }
 [...modeGrid.children].forEach(btn=>{
   btn.addEventListener('click', ()=>{
     if(animPlayer) stopAnimation();
     state.mode = btn.dataset.mode;
+    if(state.compoundMode === state.mode) state.compoundMode = null; // can't compound a mode with itself
+    if(state.mode === 'bend' || state.mode === 'ffd' || state.mode === 'helix' || state.mode === 'morph') state.compoundMode = null; // bend can't be followed by anything; ffd/helix/morph don't support compounding at all
     applyModeChrome();
+    syncSliderLabels();
     pendingReframe = true;
     persist(); rebuild();
     toast(MODE_LABEL[state.mode] + ' mode');
@@ -3818,6 +4144,89 @@ const helixGenGrid = document.getElementById('helixGenGrid');
     const genLabel = { line:'Line', circle:'Circle', pipe:'Pipe' }[state.helixGenerator];
     toast(genLabel + ' generator');
   });
+});
+
+// ---------- compound operations (v1.50.0) ----------
+// Shows/hides the whole Compound section (twist/taper/shear only — never bend/ffd/helix, see
+// computeLayerPointCompound above for why), filters out whichever mode is currently primary from the
+// choices (compounding a mode with itself isn't a coherent second step), and shows exactly the one
+// compact parameter block matching state.compoundMode. Called from inside applyModeChrome() itself
+// (not a separate call site added everywhere applyModeChrome already runs), so every existing caller
+// — mode switch, case-study load, Reset, unit toggle, Helix generator switch — keeps this in sync for
+// free.
+function applyCompoundUI(){
+  const compoundSection = document.getElementById('compoundSection');
+  const compoundGrid = document.getElementById('compoundGrid');
+  const bendNote = document.getElementById('compoundBendUnavailableNote');
+  const canCompound = state.mode === 'twist' || state.mode === 'taper' || state.mode === 'shear';
+  compoundSection.style.display = (canCompound || state.mode === 'bend') ? '' : 'none';
+  if(state.mode === 'bend'){
+    compoundGrid.style.display = 'none';
+    bendNote.style.display = '';
+  } else {
+    compoundGrid.style.display = '';
+    bendNote.style.display = 'none';
+  }
+  [...compoundGrid.children].forEach(btn=>{
+    const m = btn.dataset.compound;
+    btn.style.display = (m === state.mode) ? 'none' : ''; // can't compound a mode with itself
+    btn.classList.toggle('active', m === (state.compoundMode || ''));
+  });
+  ['Twist','Taper','Shear','Bend'].forEach(label=>{
+    document.getElementById('compound' + label + 'Block').style.display =
+      (state.compoundMode === label.toLowerCase()) ? '' : 'none';
+  });
+}
+const compoundGrid = document.getElementById('compoundGrid');
+[...compoundGrid.children].forEach(btn=>{
+  btn.addEventListener('click', ()=>{
+    const m = btn.dataset.compound || null;
+    if(m === state.mode || m === state.compoundMode) return; // no-op: same as primary, or already selected
+    if(animPlayer) stopAnimation();
+    state.compoundMode = m;
+    applyCompoundUI();
+    updateReferenceText();
+    pendingReframe = true;
+    persist(); rebuild();
+    toast(m ? `Compound: then ${MODE_LABEL[m]}` : 'Compound cleared');
+  });
+});
+const compoundAlphaSlider = document.getElementById('compoundAlphaSlider');
+const compoundTaperVSlider = document.getElementById('compoundTaperVSlider');
+const compoundTaperWSlider = document.getElementById('compoundTaperWSlider');
+const compoundShearDXSlider = document.getElementById('compoundShearDXSlider');
+const compoundShearDYSlider = document.getElementById('compoundShearDYSlider');
+const compoundBendBetaSlider = document.getElementById('compoundBendBetaSlider');
+// Each writes to the SAME state field its primary counterpart uses (state.alphaMax, state.taperV,
+// etc.) — safe because the Compound picker above never allows the same mode to be both primary and
+// secondary, so a compound slider and its primary counterpart are never live at the same time for
+// the same field. syncSliderLabels() (already updated to cover both directions) keeps whichever one
+// is currently hidden in sync too, so switching primary later shows the correct value immediately.
+compoundAlphaSlider.addEventListener('input', e=>{
+  state.alphaMax = parseFloat(e.target.value);
+  syncSliderLabels(); persist(); rebuild();
+});
+compoundTaperVSlider.addEventListener('input', e=>{
+  state.taperV = parseFloat(e.target.value);
+  syncSliderLabels(); persist(); rebuild();
+});
+compoundTaperWSlider.addEventListener('input', e=>{
+  state.taperW = parseFloat(e.target.value);
+  syncSliderLabels(); persist(); rebuild();
+});
+compoundShearDXSlider.addEventListener('input', e=>{
+  const v = parseFloat(e.target.value);
+  state.shearDXM = state.units === 'metric' ? v : v / M_TO_FT;
+  syncSliderLabels(); persist(); rebuild();
+});
+compoundShearDYSlider.addEventListener('input', e=>{
+  const v = parseFloat(e.target.value);
+  state.shearDYM = state.units === 'metric' ? v : v / M_TO_FT;
+  syncSliderLabels(); persist(); rebuild();
+});
+compoundBendBetaSlider.addEventListener('input', e=>{
+  state.bendBetaMax = parseFloat(e.target.value);
+  syncSliderLabels(); persist(); rebuild();
 });
 
 const unitsGrid = document.getElementById('unitsGrid');
@@ -4006,11 +4415,19 @@ function syncShearSliderRange(){
     shearDYSlider.min = -60; shearDYSlider.max = 60; shearDYSlider.step = 0.1;
     shearDXSlider.value = state.shearDXM.toFixed(1);
     shearDYSlider.value = state.shearDYM.toFixed(1);
+    compoundShearDXSlider.min = -60; compoundShearDXSlider.max = 60; compoundShearDXSlider.step = 0.1;
+    compoundShearDYSlider.min = -60; compoundShearDYSlider.max = 60; compoundShearDYSlider.step = 0.1;
+    compoundShearDXSlider.value = state.shearDXM.toFixed(1);
+    compoundShearDYSlider.value = state.shearDYM.toFixed(1);
   } else {
     shearDXSlider.min = -200; shearDXSlider.max = 200; shearDXSlider.step = 0.5;
     shearDYSlider.min = -200; shearDYSlider.max = 200; shearDYSlider.step = 0.5;
     shearDXSlider.value = (state.shearDXM * M_TO_FT).toFixed(1);
     shearDYSlider.value = (state.shearDYM * M_TO_FT).toFixed(1);
+    compoundShearDXSlider.min = -200; compoundShearDXSlider.max = 200; compoundShearDXSlider.step = 0.5;
+    compoundShearDYSlider.min = -200; compoundShearDYSlider.max = 200; compoundShearDYSlider.step = 0.5;
+    compoundShearDXSlider.value = (state.shearDXM * M_TO_FT).toFixed(1);
+    compoundShearDYSlider.value = (state.shearDYM * M_TO_FT).toFixed(1);
   }
 }
 syncShearSliderRange();
@@ -4043,16 +4460,27 @@ function syncHelixSliderRanges(){
 syncHelixSliderRanges();
 
 function syncFootprintSliderRange(){
+  // v1.51.0: widened 30m/100ft -> 80m/260ft to fit Lotte Super Tower's sourced 70m square base —
+  // same reasoning v1.47.0 used to widen Helix's radius sliders for Guggenheim's outer radius.
+  // Morph's To-size sliders share this range so the FROM/TO ends stay comparable at a glance.
   if(state.units === 'metric'){
-    footprintWidthSlider.min = 0.5; footprintWidthSlider.max = 30; footprintWidthSlider.step = 0.1;
-    footprintDepthSlider.min = 0.5; footprintDepthSlider.max = 30; footprintDepthSlider.step = 0.1;
+    footprintWidthSlider.min = 0.5; footprintWidthSlider.max = 80; footprintWidthSlider.step = 0.1;
+    footprintDepthSlider.min = 0.5; footprintDepthSlider.max = 80; footprintDepthSlider.step = 0.1;
     footprintWidthSlider.value = state.footprintWidthM.toFixed(1);
     footprintDepthSlider.value = state.footprintDepthM.toFixed(1);
+    morphToWidthSlider.min = 0.5; morphToWidthSlider.max = 80; morphToWidthSlider.step = 0.1;
+    morphToDepthSlider.min = 0.5; morphToDepthSlider.max = 80; morphToDepthSlider.step = 0.1;
+    morphToWidthSlider.value = state.morphToWidthM.toFixed(1);
+    morphToDepthSlider.value = state.morphToDepthM.toFixed(1);
   } else {
-    footprintWidthSlider.min = 1.5; footprintWidthSlider.max = 100; footprintWidthSlider.step = 0.5;
-    footprintDepthSlider.min = 1.5; footprintDepthSlider.max = 100; footprintDepthSlider.step = 0.5;
+    footprintWidthSlider.min = 1.5; footprintWidthSlider.max = 260; footprintWidthSlider.step = 0.5;
+    footprintDepthSlider.min = 1.5; footprintDepthSlider.max = 260; footprintDepthSlider.step = 0.5;
     footprintWidthSlider.value = (state.footprintWidthM * M_TO_FT).toFixed(1);
     footprintDepthSlider.value = (state.footprintDepthM * M_TO_FT).toFixed(1);
+    morphToWidthSlider.min = 1.5; morphToWidthSlider.max = 260; morphToWidthSlider.step = 0.5;
+    morphToDepthSlider.min = 1.5; morphToDepthSlider.max = 260; morphToDepthSlider.step = 0.5;
+    morphToWidthSlider.value = (state.morphToWidthM * M_TO_FT).toFixed(1);
+    morphToDepthSlider.value = (state.morphToDepthM * M_TO_FT).toFixed(1);
   }
 }
 syncFootprintSliderRange();
@@ -4060,11 +4488,17 @@ syncFootprintSliderRange();
 function syncSliderLabels(){
   const u = unitLabels();
   document.getElementById('alphaVal').textContent = state.alphaMax + '°';
+  alphaSlider.value = state.alphaMax;
   document.getElementById('taperVVal').textContent = state.taperV.toFixed(2);
+  taperVSlider.value = state.taperV;
   document.getElementById('taperWVal').textContent = state.taperW.toFixed(2);
+  taperWSlider.value = state.taperW;
   document.getElementById('shearDXVal').textContent = toDisplayLen(state.shearDXM).toFixed(1) + ' ' + u.len;
+  shearDXSlider.value = state.shearDXM;
   document.getElementById('shearDYVal').textContent = toDisplayLen(state.shearDYM).toFixed(1) + ' ' + u.len;
+  shearDYSlider.value = state.shearDYM;
   document.getElementById('bendBetaVal').textContent = state.bendBetaMax + '°';
+  bendBetaSlider.value = state.bendBetaMax;
   document.getElementById('floorsVal').textContent = state.floors;
   document.getElementById('floorHeightVal').textContent = toDisplayLen(state.floorHeightM).toFixed(1) + ' ' + u.len;
   document.getElementById('resVal').textContent = state.segments;
@@ -4081,6 +4515,25 @@ function syncSliderLabels(){
     `= ${state.helixTurns} × ${toDisplayLen(state.helixPitchM).toFixed(1)}${u.len} = ${toDisplayLen(state.helixTurns*state.helixPitchM).toFixed(1)}${u.len} total rise`;
   document.getElementById('footprintWidthVal').textContent = toDisplayLen(state.footprintWidthM).toFixed(1) + ' ' + u.len;
   document.getElementById('footprintDepthVal').textContent = toDisplayLen(state.footprintDepthM).toFixed(1) + ' ' + u.len;
+  document.getElementById('morphToWidthVal').textContent = toDisplayLen(state.morphToWidthM).toFixed(1) + ' ' + u.len;
+  document.getElementById('morphToDepthVal').textContent = toDisplayLen(state.morphToDepthM).toFixed(1) + ' ' + u.len;
+  // Compound sliders are separate DOM elements sharing the SAME state fields as their primary
+  // counterparts (see computeLayerPointCompound above for why that's safe — primary and compound
+  // are always different modes) — so every change needs both label text AND slider position kept in
+  // sync here, not just the label the way the primary sliders' own 'input' handlers already do for
+  // themselves natively via the browser.
+  document.getElementById('compoundAlphaVal').textContent = state.alphaMax + '°';
+  compoundAlphaSlider.value = state.alphaMax;
+  document.getElementById('compoundTaperVVal').textContent = state.taperV.toFixed(2);
+  compoundTaperVSlider.value = state.taperV;
+  document.getElementById('compoundTaperWVal').textContent = state.taperW.toFixed(2);
+  compoundTaperWSlider.value = state.taperW;
+  document.getElementById('compoundShearDXVal').textContent = toDisplayLen(state.shearDXM).toFixed(1) + ' ' + u.len;
+  compoundShearDXSlider.value = state.shearDXM;
+  document.getElementById('compoundShearDYVal').textContent = toDisplayLen(state.shearDYM).toFixed(1) + ' ' + u.len;
+  compoundShearDYSlider.value = state.shearDYM;
+  document.getElementById('compoundBendBetaVal').textContent = state.bendBetaMax + '°';
+  compoundBendBetaSlider.value = state.bendBetaMax;
 }
 syncSliderLabels();
 
@@ -4165,6 +4618,16 @@ footprintWidthSlider.addEventListener('input', e=>{
 footprintDepthSlider.addEventListener('input', e=>{
   const v = parseFloat(e.target.value);
   state.footprintDepthM = state.units === 'metric' ? v : v / M_TO_FT;
+  syncSliderLabels(); persist(); rebuild();
+});
+morphToWidthSlider.addEventListener('input', e=>{
+  const v = parseFloat(e.target.value);
+  state.morphToWidthM = state.units === 'metric' ? v : v / M_TO_FT;
+  syncSliderLabels(); persist(); rebuild();
+});
+morphToDepthSlider.addEventListener('input', e=>{
+  const v = parseFloat(e.target.value);
+  state.morphToDepthM = state.units === 'metric' ? v : v / M_TO_FT;
   syncSliderLabels(); persist(); rebuild();
 });
 panelSubdivSlider.addEventListener('input', e=>{
@@ -4294,6 +4757,7 @@ const MODE_DEFAULTS = {
   shear: { shearDXM: 3.0, shearDYM: 1.0, floors: 8, floorHeightM: 3.5, footprintWidthM: 2.0, footprintDepthM: 2.0 },
   bend: { bendBetaMax: 180, floors: 8, floorHeightM: 3.5, footprintWidthM: 2.0, footprintDepthM: 2.0 },
   helix: { helixGenerator: 'line', helixTurns: 3, helixPitchM: 3.0, helixRInnerM: 0.3, helixROuterM: 2.2, helixTubeRM: 0.25, helixTubeOffsetM: 1.5 },
+  morph: { preset: 'square', footprintWidthM: 2.0, footprintDepthM: 2.0, morphToPreset: 'ellipse', morphToWidthM: 2.0, morphToDepthM: 2.0, floors: 8, floorHeightM: 3.5 },
 };
 function resetModeValues(mode){
   if(animPlayer) stopAnimation();
@@ -4311,6 +4775,10 @@ function resetModeValues(mode){
   bendBetaSlider.value = state.bendBetaMax;
   floorsSlider.value = state.floors;
   helixTurnsSlider.value = state.helixTurns;
+  if(mode === 'morph'){
+    [...presetGrid.children].forEach(c=>c.classList.toggle('active', c.dataset.preset === state.preset));
+    [...morphToGrid.children].forEach(c=>c.classList.toggle('active', c.dataset.morphto === state.morphToPreset));
+  }
   syncFloorHeightSliderRange();
   syncFootprintSliderRange();
   syncShearSliderRange();
@@ -4431,6 +4899,25 @@ const CASE_STUDIES = {
     // — same reasoning that already sized footprint sliders up to 30m for real buildings.
     fields: { helixGenerator:'line', helixTurns:6, helixPitchM:(92*0.3048)/6, helixRInnerM:4.5, helixROuterM:(114/2)*0.3048 },
     toast: 'Guggenheim Museum NYC — 6-turn spiral ramp, ~28m/92ft rise (Frank Lloyd Wright, 1959)'
+  },
+  lottesupertower: {
+    mode: 'morph', label: 'Lotte Super Tower',
+    // Morph's first case study — an unbuilt SOM proposal (design finish 2008, Seoul), distinct from
+    // the built, KPF-designed Lotte World Tower. Rejected outright as a candidate for every OTHER
+    // mode here, including compound: SOM's own description is that the tower rises "from a 70-meter
+    // square base to a 40-meter diameter circle at its top" — a cross-section TOPOLOGY change (4-gon
+    // to round), not a scaling/twisting/shearing of one consistent profile shape the way even a
+    // compound twist+taper is. That's exactly the gap Morph exists to fill.
+    //
+    // Height (555m), story count (112), base (70m square), and top (40m diameter circle) are all
+    // sourced directly from SOM's project page. floorHeightM is derived (555/112), not independently
+    // sourced — same status as every other case study's per-floor height. No published figure
+    // describes HOW the square-to-circle transition is distributed with height (linear vs.
+    // concentrated near the top, the way The Shard's real taper concentrates near its spire) — Morph
+    // only supports a linear blend in this release, so this is a simplification, not a literal match,
+    // the same treatment already given to The Shard's taper and Pisa's lean.
+    fields: { preset:'square', footprintWidthM:70, footprintDepthM:70, morphToPreset:'ellipse', morphToWidthM:40, morphToDepthM:40, floors:112, floorHeightM:555/112 },
+    toast: 'Lotte Super Tower — 555m, 112 floors, square base to circular top (SOM, unbuilt, 2008)'
   }
 };
 function loadCaseStudy(key){
@@ -4438,11 +4925,15 @@ function loadCaseStudy(key){
   if(!cs) return;
   if(animPlayer) stopAnimation();
   state.mode = cs.mode;
+  state.compoundMode = null; // every case study is a specific real building's single-operation
+                              // figure — compounding on top would misrepresent it as something the
+                              // sourced facts don't actually describe
   Object.assign(state, cs.fields);
   // Reposition every affected control to match, same approach resetModeValues uses — unit-aware
   // sync functions so this lands correctly whether the sidebar is currently metric or imperial.
   // Sliders belonging to modes other than cs.mode are harmless to update even while hidden.
   [...presetGrid.children].forEach(c=>c.classList.toggle('active', c.dataset.preset === state.preset));
+  [...morphToGrid.children].forEach(c=>c.classList.toggle('active', c.dataset.morphto === state.morphToPreset));
   alphaSlider.value = state.alphaMax;
   taperVSlider.value = state.taperV;
   taperWSlider.value = state.taperW;
@@ -4493,6 +4984,14 @@ function easeInOutCubic(t){ return t < 0.5 ? 4*t*t*t : 1 - Math.pow(-2*t+2, 3)/2
 
 const playPauseBtn = document.getElementById('playPauseBtn');
 function startAnimation(){
+  if(state.mode === 'morph'){
+    // Morph has no single 0->dialed-in scalar the way every axis-based mode does — its "parameter"
+    // IS height itself (see computeLayerPoint's morph branch), so there's nothing separate to
+    // ping-pong against. Explicit toast rather than a silent no-op, same reasoning as FFD's
+    // no-offset-yet guard just below.
+    toast('Morph has no animatable parameter — height itself drives the blend');
+    return;
+  }
   if(state.mode === 'ffd'){
     // Free has no single scalar deformation parameter the way every other mode does — 8
     // independently-draggable control points instead. "Animate toward the current target" still
@@ -5144,6 +5643,8 @@ const EDITABLE_FIELDS = [
   { valId:'helixTubeOffsetVal', sliderEl:helixTubeOffsetSlider, type:'length', getM:()=>state.helixTubeOffsetM, setM:v=>{state.helixTubeOffsetM=v;} },
   { valId:'footprintWidthVal', sliderEl:footprintWidthSlider, type:'length', getM:()=>state.footprintWidthM, setM:v=>{state.footprintWidthM=v;} },
   { valId:'footprintDepthVal', sliderEl:footprintDepthSlider, type:'length', getM:()=>state.footprintDepthM, setM:v=>{state.footprintDepthM=v;} },
+  { valId:'morphToWidthVal', sliderEl:morphToWidthSlider, type:'length', getM:()=>state.morphToWidthM, setM:v=>{state.morphToWidthM=v;} },
+  { valId:'morphToDepthVal', sliderEl:morphToDepthSlider, type:'length', getM:()=>state.morphToDepthM, setM:v=>{state.morphToDepthM=v;} },
 ];
 
 function bindEditableValue(cfg){
