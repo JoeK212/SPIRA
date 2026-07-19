@@ -4,6 +4,22 @@ Interactive explorer of architectural deformation operations — twisting, taper
 Joe.K · axisbim.io
 
 CHANGELOG
+v1.31.0 - 2026-07-18 - Fixed a real framing bug user reported/screenshotted on Front view: a
+         tall/narrow building (The Shard's Taper case study, 1015.7ft tall on a 91.9ft footprint)
+         filled the viewport almost edge-to-edge vertically with no padding margin, while leaving
+         most of the width empty — not an actual "zoom to fit," just a coincidence of the old
+         height-only heuristic. Root cause: frameCameraTop()/frameCameraFront() used a separate,
+         older distance formula (dist = h * a fixed multiplier, no bounding-box math at all) that
+         predates frameCameraDefault()'s (Home's) proper Box3 fit and was never upgraded to match
+         it — computed and confirmed numerically that the old Front formula's distance (~232m for
+         The Shard) fell well short of the ~400m+ actually needed to fit the full height within the
+         camera's vertical FOV, let alone with Home's 15% padding. Refactored the fit math (real
+         Box3 → circumscribed-sphere radius → checked against both horizontal and vertical FOV,
+         whichever is more restrictive → 15% pad) into a shared fitBoxDistance() helper, and
+         switched Top and Front to use it — same fit quality as Home now, for all three buttons,
+         regardless of how tall/narrow or wide/short the model is. Each button still positions the
+         camera along its own axis (Top: straight down; Front: along -z) and Top still keeps its
+         OrbitControls-singularity workaround (swapped up-vector, sub-mm position epsilon).
 v1.30.0 - 2026-07-18 - Fit-and-finish pass, three items. (1) The Panel flatness legend's gradient
          clamps at 50mm — every panel past that renders identically red, so a model at 51mm and one
          at 200mm looked the same. Added a marker on the gradient bar at the actual max warp
@@ -1206,7 +1222,7 @@ v1.0.0 - 2026-07-17 - Initial build. Twist operation on four cross-section prese
 <script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
 <script src="https://cdn.jsdelivr.net/npm/three@0.128.0/examples/js/controls/OrbitControls.js"></script>
 <script>
-const APP_VERSION = '1.30.0';
+const APP_VERSION = '1.31.0';
 
 // ---------- toast ----------
 let toastTimer=null;
@@ -1738,15 +1754,38 @@ controls.dampingFactor = 0.08;
 // ---------- view framing (Home / Top / Front buttons) ----------
 // Camera framing fits the actual rendered bounding box — accounts for footprint width/depth as
 // well as height, so a wide/deep sample (Width/Depth sliders pushed apart, or a Helix with a large
-// outer radius) frames correctly instead of needing a manual zoom-out. Falls back to the old
-// height-only heuristic if called before solidGroup has any geometry in it (shouldn't happen in
-// normal use now that rebuild() calls this itself after the first build — see hasFramedOnce below
-// — but kept as a defensive fallback for the Home button or any other future call site).
+// outer radius) frames correctly instead of needing a manual zoom-out.
+//
+// v1.31.0: this box-fit was previously Home-only. Top and Front used an older, separate height-only
+// heuristic (dist = h * a fixed multiplier, no Box3 involved at all) that predates it and was never
+// upgraded — harmless for a roughly cube-proportioned model, but for a tall/narrow real building
+// (The Shard: 1015ft tall, 92ft footprint) it left almost zero headroom top-to-bottom (no padding
+// margin the way Home's 15% pad gives) while leaving most of the viewport empty left/right, since
+// the distance was chosen purely from height with no awareness of the viewport's aspect ratio or
+// the model's actual width. User report/screenshot: Front view showing the tower nearly edge-to-edge
+// vertically with huge dead space on both sides — not actually "zoomed to fit," just coincidentally
+// tall enough to reach the frame's top and bottom with no margin. All three view buttons now share
+// one fit calculation (real Box3, circumscribed-sphere radius, checked against both horizontal and
+// vertical FOV — whichever is more restrictive — with 15% padding), so "zoom to fit, centered" means
+// the same thing everywhere regardless of which axis happens to be the tight one.
+function fitBoxDistance(){
+  const box = new THREE.Box3().setFromObject(solidGroup);
+  if(box.isEmpty()) return null;
+  const center = box.getCenter(new THREE.Vector3());
+  const size = box.getSize(new THREE.Vector3());
+  const radius = size.length() / 2; // exact circumscribed-sphere radius of the bounding box
+  const vFov = camera.fov * Math.PI/180;
+  const hFov = 2 * Math.atan(Math.tan(vFov/2) * camera.aspect);
+  const fitDist = Math.max(radius / Math.sin(vFov/2), radius / Math.sin(hFov/2)) * 1.15; // 15% pad
+  return { center, radius, dist: Math.max(fitDist, 6) };
+}
 function frameCameraDefault(){
   const camDir = new THREE.Vector3(9, 8, 11).normalize();
   camera.up.set(0, 1, 0);
-  const box = new THREE.Box3().setFromObject(solidGroup);
-  if(box.isEmpty()){
+  const fit = fitBoxDistance();
+  if(!fit){
+    // Defensive fallback for a call before solidGroup has any geometry (shouldn't happen in normal
+    // use, since rebuild() calls this itself once actual geometry exists — see pendingReframe).
     const h = totalHeightM();
     const camDist = Math.max(h * 0.58, 6); // 0.58 reproduces the old fixed (9,8,11) framing at h=28m
     camera.near = Math.max(camDist*0.01, 0.01);
@@ -1757,13 +1796,7 @@ function frameCameraDefault(){
     controls.update();
     return;
   }
-  const center = box.getCenter(new THREE.Vector3());
-  const size = box.getSize(new THREE.Vector3());
-  const radius = size.length() / 2; // exact circumscribed-sphere radius of the bounding box
-  const vFov = camera.fov * Math.PI/180;
-  const hFov = 2 * Math.atan(Math.tan(vFov/2) * camera.aspect);
-  const fitDist = Math.max(radius / Math.sin(vFov/2), radius / Math.sin(hFov/2)) * 1.15; // 15% pad
-  const dist = Math.max(fitDist, 6);
+  const { center, radius, dist } = fit;
   // near/far scale with the model instead of a fixed range — a fixed far=200 clipped the entire
   // model for anything larger than ~200 units (a real-scale case study like Cayan Tower is 306m
   // tall), rendering a blank canvas even though framing math itself was correct.
@@ -1780,29 +1813,51 @@ function frameCameraDefault(){
 // swapped to a horizontal axis and the camera position gets a sub-millimeter epsilon offset — both
 // standard workarounds, visually imperceptible, that keep the controls' math well-defined.
 function frameCameraTop(){
-  const h = totalHeightM();
-  const dist = Math.max(h * 0.9, 8);
   camera.up.set(0, 0, -1);
+  const fit = fitBoxDistance();
+  if(!fit){
+    const h = totalHeightM();
+    const dist = Math.max(h * 0.9, 8);
+    camera.near = Math.max(dist*0.01, 0.01);
+    camera.far = dist*2 + h*2 + 50;
+    camera.updateProjectionMatrix();
+    camera.position.set(0.001, h/2 + dist, 0.001);
+    controls.target.set(0, h/2, 0);
+    controls.update();
+    return;
+  }
+  const { center, radius, dist } = fit;
   camera.near = Math.max(dist*0.01, 0.01);
-  camera.far = dist*2 + h*2 + 50;
+  camera.far = dist + radius*2 + 50;
   camera.updateProjectionMatrix();
-  camera.position.set(0.001, h/2 + dist, 0.001);
-  controls.target.set(0, h/2, 0);
+  camera.position.set(center.x+0.001, center.y + dist, center.z+0.001);
+  controls.target.copy(center);
   controls.update();
 }
 // Front: looks horizontally toward the model along -z — the standard architectural elevation view.
 function frameCameraFront(){
-  const h = totalHeightM();
-  const dist = Math.max(h * 0.75, 8);
   camera.up.set(0, 1, 0);
+  const fit = fitBoxDistance();
+  if(!fit){
+    const h = totalHeightM();
+    const dist = Math.max(h * 0.75, 8);
+    camera.near = Math.max(dist*0.01, 0.01);
+    camera.far = dist*2 + h*2 + 50;
+    camera.updateProjectionMatrix();
+    camera.position.set(0, h/2, dist);
+    controls.target.set(0, h/2, 0);
+    controls.update();
+    return;
+  }
+  const { center, radius, dist } = fit;
   camera.near = Math.max(dist*0.01, 0.01);
-  camera.far = dist*2 + h*2 + 50;
+  camera.far = dist + radius*2 + 50;
   camera.updateProjectionMatrix();
-  camera.position.set(0, h/2, dist);
-  controls.target.set(0, h/2, 0);
+  camera.position.set(center.x, center.y, center.z + dist);
+  controls.target.copy(center);
   controls.update();
 }
-// First-build camera fit happens inside rebuild() itself (see hasFramedOnce below), once actual
+// First-build camera fit happens inside rebuild() itself (see pendingReframe below), once actual
 // geometry exists — calling frameCameraDefault() here would just hit its empty-box fallback.
 
 scene.add(new THREE.AmbientLight(0xffffff, 0.65));

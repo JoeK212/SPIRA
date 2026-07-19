@@ -215,20 +215,35 @@ text as something to check with the overlay.
 
 ## Camera framing
 
-`frameCameraDefault()` fits an actual Three.js `Box3` computed from the rendered solid — the
+`fitBoxDistance()` fits an actual Three.js `Box3` computed from the rendered solid — the
 circumscribed-sphere radius of that box, checked against both horizontal and vertical FOV (whichever
 is more restrictive, so it doesn't under-frame a wide/short shape when the viewport happens to be
 narrower than tall), with 15% padding. `Box3.setFromObject()` traverses every descendant of
 `solidGroup` regardless of `.visible`, so this stays correct even while Panel flatness (warp) hides
 the solid mesh itself (see above).
 
-Runs on the very first `rebuild()` after boot, again whenever the Home button is clicked, and
-again whenever `pendingReframe` is true at the start of a `rebuild()` — a flag set by the button
-handlers for Operation, cross-section preset, Helix generator, a case study, and Reset values, all
-of which can change the model's size/shape/position drastically enough that the previous camera
-position would frame empty space or a sliver of the new model. Ordinary slider `input` events do
-NOT set it, so live-dragging a parameter never disturbs mid-session zoom/orbit — the same principle
-the original one-shot `hasFramedOnce` guard was protecting, generalized from "only the very first
+`frameCameraDefault()` (Home), `frameCameraTop()`, and `frameCameraFront()` all call this one
+shared helper and only differ in which axis they position the camera along and which way `up`
+points — Top swaps `up` to a horizontal axis and gives the camera a sub-millimeter position epsilon
+(both standard workarounds for a known OrbitControls singularity when the camera-to-target vector
+aligns exactly with `up`). This wasn't always true: Top and Front originally used an older,
+separate height-only heuristic (`dist = h × a fixed multiplier`, no bounding box involved) that
+predated `fitBoxDistance()` and was never upgraded to match it — harmless for a roughly
+cube-proportioned model, but for a tall/narrow real building (The Shard: 1015.7ft tall, 91.9ft
+footprint) the old Front distance (~232m) fell well short of what's actually needed to fit the full
+height within the vertical FOV (~400m+), let alone with any padding — the tower filled the
+viewport nearly edge-to-edge vertically with no margin while leaving most of the width empty,
+which looked like a coincidental near-fit rather than an actual one. Fixed in v1.31.0 by having all
+three share `fitBoxDistance()`, so "zoom to fit, centered" now means the same thing for every view
+button regardless of the model's proportions.
+
+Runs on the very first `rebuild()` after boot, again whenever Home/Top/Front is clicked, and again
+whenever `pendingReframe` is true at the start of a `rebuild()` — a flag set by the button handlers
+for Operation, cross-section preset, Helix generator, a case study, and Reset values, all of which
+can change the model's size/shape/position drastically enough that the previous camera position
+would frame empty space or a sliver of the new model. Ordinary slider `input` events do NOT set it,
+so live-dragging a parameter never disturbs mid-session zoom/orbit — the same principle the
+original one-shot `hasFramedOnce` guard was protecting, generalized from "only the very first
 build" to "any actual reframe-worthy change," after real button-triggered framing failures (Helix
 nearly invisible after switching modes; Bend's base plane filling the viewport) showed the one-shot
 version wasn't enough.

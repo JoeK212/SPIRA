@@ -117,10 +117,11 @@ dimensions, footprint width/depth) accept feet-inches notation in imperial mode 
 (and floors/floor-height, where relevant) to their original defaults.
 
 **View navigation.** Top (plan), Front (elevation), and Home buttons sit in the bottom-right of the
-viewport for standard orthographic-ish framing, alongside the usual orbit/pan/zoom — Home also
-re-fits the camera to whatever's currently on screen. A small marker labeled "0,0,0" is always
-visible at the true world origin when the Axis overlay is on, as a fixed reference point regardless
-of view.
+viewport for standard orthographic-ish framing, alongside the usual orbit/pan/zoom — all three
+zoom to fit the actual model, centered, regardless of how tall/narrow or wide/short it is, and
+Home re-fits to whatever's currently on screen. A small marker labeled "0,0,0" is always visible
+at the true world origin when the Axis overlay is on, as a fixed reference point regardless of
+view.
 
 **Help.** The "?" button in the header opens usage documentation for the app's own controls —
 separate from the Reference panel below, which explains the math behind each operation.
