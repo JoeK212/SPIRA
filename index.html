@@ -4,6 +4,19 @@ Interactive explorer of architectural deformation operations — twisting, taper
 Joe.K · axisbim.io
 
 CHANGELOG
+v1.46.0 - 2026-07-19 - Collapsed the Export section's explanatory text by default, per a screenshot
+         of Advanced mode showing four back-to-back paragraphs (PNG export, share link, loft-profiles
+         JSON, Dynamo script) all expanded at once — exactly the density Simple/Advanced (v1.44.0)
+         was meant to relieve, just re-exposed in full once someone opens Advanced. Wrapped each in a
+         native <details>/<summary> ("What does this do?"), collapsed by default, one shared
+         .info-toggle CSS class so all four (and any future one) look and behave identically —
+         native element means free keyboard/screen-reader support and no JS state to track, closes
+         back to collapsed on reload rather than needing its own persistence. Buttons and the loft-
+         profile-count slider stay always visible; only the prose collapses. Checked the rest of
+         Advanced (Overlays, Units, Projection) for the same pattern — nothing else there is static
+         explanatory prose at this length, it's short dynamic status text, so the fix was scoped to
+         exactly where the clutter actually was rather than added everywhere by default. Added 3 new
+         audit_deploy.js checks (78/78 passing).
 v1.45.0 - 2026-07-19 - Theme pass, per user request to look at "the entire theme design... what else
          can we do." Checked the actual CSS rather than guessing, which turned up two real gaps
          before any new feature work: 'Inter'/'Space Grotesk'/'Space Mono' were referenced throughout
@@ -965,6 +978,27 @@ v1.0.0 - 2026-07-17 - Initial build. Twist operation on four cross-section prese
   .caveat{
     color:var(--ochre); border-left:2px solid var(--ochre); padding-left:8px;
   }
+  /* v1.46.0: collapsed-by-default explanatory text for Advanced-section buttons — was static
+     always-on prose (4 paragraphs in Export alone), the single biggest source of the "clunky"
+     complaint that prompted Simple/Advanced in v1.44.0 in the first place, since Advanced mode
+     re-exposed all of it at once. Native <details>/<summary> rather than a hand-rolled toggle: free
+     keyboard/screen-reader support, no JS state to manage, and one shared class keeps every instance
+     visually identical (the same consistency principle v1.44.0 already established for Simple vs
+     Advanced itself). */
+  details.info-toggle{ margin-top:6px; margin-bottom:8px; }
+  details.info-toggle summary{
+    font-size:0.72rem; color:var(--muted); cursor:pointer; list-style:none;
+    display:flex; align-items:center; gap:4px; user-select:none;
+  }
+  details.info-toggle summary::-webkit-details-marker{ display:none; }
+  details.info-toggle summary::before{
+    content:'›'; display:inline-block; font-size:0.9rem; line-height:1;
+    transition:transform 0.15s; transform:rotate(0deg);
+  }
+  details.info-toggle[open] summary::before{ transform:rotate(90deg); }
+  details.info-toggle .info-body{
+    font-size:0.72rem; line-height:1.5; color:var(--muted); margin:6px 0 0; padding-left:14px;
+  }
 
   header{
     display:flex; align-items:baseline; gap:14px;
@@ -1491,39 +1525,51 @@ v1.0.0 - 2026-07-17 - Initial build. Twist operation on four cross-section prese
     <section class="group" id="exportSection">
       <h3>Export</h3>
       <button class="btn secondary" id="exportViewPngBtn" style="width:100%;">Export view (.png)</button>
-      <div style="font-size:0.72rem; line-height:1.5; color:var(--muted); margin-top:6px; margin-bottom:10px; padding-bottom:10px; border-bottom:1px solid var(--line);">
-        Captures the 3D view exactly as shown — current camera angle, Perspective/Orthographic
-        projection, the solid, and every 3D overlay (axis, rulings, point labels, panel colors).
-        The sidebar HUD numbers and the panel-warp legend are separate page elements, not part of
-        the 3D view, so they aren't included.
-      </div>
+      <details class="info-toggle">
+        <summary>What does this do?</summary>
+        <div class="info-body">
+          Captures the 3D view exactly as shown — current camera angle, Perspective/Orthographic
+          projection, the solid, and every 3D overlay (axis, rulings, point labels, panel colors).
+          The sidebar HUD numbers and the panel-warp legend are separate page elements, not part of
+          the 3D view, so they aren't included.
+        </div>
+      </details>
       <button class="btn secondary" id="copyShareLinkBtn" style="width:100%;">Copy share link</button>
-      <div style="font-size:0.72rem; line-height:1.5; color:var(--muted); margin-top:6px; margin-bottom:10px; padding-bottom:10px; border-bottom:1px solid var(--line);">
-        Copies a URL that reproduces this exact configuration — mode, preset, every deformation
-        parameter, footprint, floors, units, projection, and overlay settings — for anyone who
-        opens it. Everything lives in the link itself (nothing sent to a server), so it works from
-        any copy of this page.
-      </div>
+      <details class="info-toggle">
+        <summary>What does this do?</summary>
+        <div class="info-body">
+          Copies a URL that reproduces this exact configuration — mode, preset, every deformation
+          parameter, footprint, floors, units, projection, and overlay settings — for anyone who
+          opens it. Everything lives in the link itself (nothing sent to a server), so it works from
+          any copy of this page.
+        </div>
+      </details>
       <div class="slider-row">
         <div class="top"><span>loft profiles (for JSON export)</span><span class="val" id="loftProfileCountVal">20</span></div>
         <input type="range" id="loftProfileCountSlider" min="3" max="60" step="1" value="20">
       </div>
       <button class="btn secondary" id="exportLoftJsonBtn" style="width:100%; margin-top:4px;">Export loft profiles (.json)</button>
-      <div style="font-size:0.72rem; line-height:1.5; color:var(--muted); margin-top:6px;">
-        For rebuilding the current form natively in Revit (via the Dynamo script below). Exports
-        evenly-spaced cross-section profiles up the height — more profiles track a curved operation
-        (Twist/Taper/Bend) more closely, since Revit's own loft fits a true curved surface through
-        them rather than approximating with flat facets. Deliberately a separate count from
-        "resolution (slices)" above: a loft only needs enough profiles for Revit's own curve fit to
-        converge, not enough triangles to look smooth on screen — usually far fewer.
-      </div>
+      <details class="info-toggle">
+        <summary>What does this do?</summary>
+        <div class="info-body">
+          For rebuilding the current form natively in Revit (via the Dynamo script below). Exports
+          evenly-spaced cross-section profiles up the height — more profiles track a curved operation
+          (Twist/Taper/Bend) more closely, since Revit's own loft fits a true curved surface through
+          them rather than approximating with flat facets. Deliberately a separate count from
+          "resolution (slices)" above: a loft only needs enough profiles for Revit's own curve fit to
+          converge, not enough triangles to look smooth on screen — usually far fewer.
+        </div>
+      </details>
       <button class="btn secondary" id="downloadDynamoScriptBtn" style="width:100%; margin-top:8px;">Download Dynamo import script (.py)</button>
-      <div style="font-size:0.72rem; line-height:1.5; color:var(--muted); margin-top:6px;">
-        Paste into a Python Script node (File Path node → its IN[0]) in a blank Dynamo graph —
-        Dynamo ships with Revit, nothing extra to install. Run it with a Conceptual Mass family
-        document active to build a real, loadable Mass Form; run it with a project active for a
-        one-off Mass-category DirectShape instead. Same script either way.
-      </div>
+      <details class="info-toggle">
+        <summary>What does this do?</summary>
+        <div class="info-body">
+          Paste into a Python Script node (File Path node → its IN[0]) in a blank Dynamo graph —
+          Dynamo ships with Revit, nothing extra to install. Run it with a Conceptual Mass family
+          document active to build a real, loadable Mass Form; run it with a project active for a
+          one-off Mass-category DirectShape instead. Same script either way.
+        </div>
+      </details>
     </section>
 
 
@@ -1550,7 +1596,7 @@ v1.0.0 - 2026-07-17 - Initial build. Twist operation on four cross-section prese
 <script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
 <script src="https://cdn.jsdelivr.net/npm/three@0.128.0/examples/js/controls/OrbitControls.js"></script>
 <script>
-const APP_VERSION = '1.45.0';
+const APP_VERSION = '1.46.0';
 
 // ---------- toast ----------
 let toastTimer=null;

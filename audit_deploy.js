@@ -354,6 +354,23 @@ check('groundGrid is added to `scene` directly, not solidGroup/overlayGroup — 
 check('applyTheme() disposes the previous groundGrid\'s geometry and material before replacing it on every theme switch (GridHelper\'s two-tone color is baked into per-vertex color attributes at construction, so switching theme means building a new one, not recoloring in place — and the old one must not leak)',
   /groundGrid\.geometry\.dispose\(\)/.test(src) && /groundGrid\.material\.dispose\(\)/.test(src));
 
+/* ===================== v1.46.0 — collapsible Export descriptions ===================== */
+sectionHeader('v1.46.0 — collapsible Export descriptions');
+check('all four Export-section explanatory paragraphs (PNG export, share link, loft JSON, Dynamo script) are wrapped in <details class="info-toggle">, not plain always-visible <div>s',
+  (function(){
+    const m = src.match(/<section class="group" id="exportSection">[\s\S]*?<\/section>/);
+    if(!m) return false;
+    return (m[0].match(/<details class="info-toggle">/g) || []).length === 4;
+  })());
+check('none of the four <details> blocks carry an `open` attribute — collapsed by default is the whole point, not just available',
+  (function(){
+    const m = src.match(/<section class="group" id="exportSection">[\s\S]*?<\/section>/);
+    return !!m && !/<details class="info-toggle" open/.test(m[0]) && !/<details open/.test(m[0]);
+  })());
+check('the four action buttons (Export view, Copy share link, Export loft profiles, Download Dynamo script) remain plain always-visible <button>s outside the <details> — only the prose collapses, not the controls themselves',
+  /id="exportViewPngBtn"[\s\S]{0,40}<\/button>\s*<details/.test(src) &&
+  /id="copyShareLinkBtn"[\s\S]{0,40}<\/button>\s*<details/.test(src));
+
 /* ===================== Summary ===================== */
 console.log(`\n${BOLD}${'-'.repeat(40)}${RESET}`);
 console.log(`${GREEN}${pass} passed${RESET}, ${fail ? RED : DIM}${fail} failed${RESET}`);
