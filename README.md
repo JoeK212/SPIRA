@@ -161,11 +161,20 @@ active for a real, loadable Mass Family, or with a project active for a one-off 
 
 **Sidebar: Simple/Advanced, theme, &amp; resizing.** The View toggle at the top switches between
 Simple (Operation, Cross-section, Deformation parameters, Reference — just the shape) and Advanced
-(adds Units, Projection, resolution, Overlays, and Export) — the same sections hide or show no matter
-which Operation is active. A second toggle switches between the default paper theme and a dark
-"Blueprint" theme (pale linework on deep blue, after the architectural-drawing convention). Drag the
-handle at the sidebar's left edge to resize it. All three choices are remembered for next time, kept
-separate from the model itself so they're not swept into "Copy share link" or reset by Reset Values.
+(adds Units, Projection, resolution, Overlays, Compare, and Export) — the same sections hide or show
+no matter which Operation is active. A second toggle switches between the default paper theme and a
+dark "Blueprint" theme (pale linework on deep blue, after the architectural-drawing convention). Drag
+the handle at the sidebar's left edge to resize it. All three choices are remembered for next time,
+kept separate from the model itself so they're not swept into "Copy share link" or reset by Reset
+Values.
+
+**Play / Pause.** Animates the current Operation's own deformation parameter(s) between a neutral
+starting value and whatever's currently dialed in, looping back and forth. Dragging any slider,
+switching Operation, loading a case study, or Reset all stop it automatically.
+
+**Compare (Advanced view).** "Save snapshot" freezes the current shape as a translucent reference
+ghost overlaid on the live model — change any parameter, even switch Operation entirely, and see
+exactly how the new shape differs in the same view. The snapshot lives only in the current session.
 
 Single HTML file, no build step, Three.js (r128) via CDN. Deployed via GitHub → Netlify
 continuous deployment.

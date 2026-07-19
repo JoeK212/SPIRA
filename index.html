@@ -4,6 +4,60 @@ Interactive explorer of architectural deformation operations — twisting, taper
 Joe.K · axisbim.io
 
 CHANGELOG
+v1.47.0 - 2026-07-19 - Three features requested together: animation, comparison mode, more case
+         studies.
+         CASE STUDY: added the Guggenheim Museum NYC's spiral ramp as Helix's first case study —
+         turns (6) and total rise (~92ft/28m) sourced across multiple sources; outer radius sourced
+         too but only as an average, since the real ramp genuinely widens with height (100ft dia. at
+         bottom to 128ft at top) rather than holding one radius, which Helix's fixed-radius Line
+         generator can't represent — same single-parameter-simplification treatment as The Shard's
+         taper estimate, not the compound-mismatch that got Capital Gate/Shanghai Tower rejected.
+         Searched specifically for a real single-axis Bend candidate (curves along its vertical axis
+         without also twisting or tapering) and found nothing that held up — documented in-code
+         rather than forcing a compound building in with an understated caveat. Bend still has none;
+         Shear still has none (v1.41.0). Widened the Helix outer/inner radius sliders (previously
+         6m/3m, sized for generic exploration) to 20m/5m to fit this building's real scale, matching
+         why footprint sliders already go to 30m. Fixed a real gap found while wiring this up:
+         loadCaseStudy() synced every other mode's sliders on load except Helix's — same
+         one-directional bug pattern as the v1.42.0 footprint-reset fix, just never triggered before
+         because Helix never had a case study to expose it.
+         ANIMATION: one Play/Pause button (top of Deformation parameters, not duplicated per mode)
+         ping-pongs the current Operation's own primary parameter(s) between a neutral value and
+         whatever's dialed in. Mutates `state` directly each frame and restores the exact
+         pre-animation values on stop, rather than threading a parallel parameter-override path
+         through computeLayerPoint/buildDeformedGeometry — those already read straight from `state`
+         everywhere, and duplicating that plumbing to avoid a few frames of temporary mutation would
+         be a much larger, riskier change to already-verified geometry code. Runs inside the existing
+         animate() rAF loop and calls the very same rebuild() FFD handle dragging already calls on
+         every pointermove — not a new class of per-frame cost, a new source of an already-accepted
+         one. Verified Bend's β=0 case against the actual formula before relying on it (already
+         safely guarded, straight-fallback at |β|<1e-6) rather than assuming; used a small epsilon
+         for Helix's zero-turns case to avoid a degenerate flat mesh. Stops automatically on manual
+         slider drag, Operation switch, case-study load, or Reset — each of those calls
+         stopAnimation() from inside its own handler (not a second listener racing the first) so a
+         mid-flight switch can never restore stale pre-switch values over what the switch just set.
+         COMPARISON MODE: "Save snapshot" (Compare, Advanced view) clones the current solid as a
+         translucent ghost overlaid on the live model, rather than a literal second synced viewport —
+         this app's single scene/camera/renderer/controls stack is referenced directly throughout
+         rebuild() and every overlay function, and duplicating that whole stack for a real
+         side-by-side view would be a far larger, riskier restructuring than the feature is worth.
+         Ghost geometry: temporarily swap `state` to the snapshot's captured values, call the real
+         unmodified rebuild(), clone solidGroup's resulting mesh(es), swap state back, rebuild()
+         again for the live geometry — reuses the exact same, already-verified geometry path with
+         zero duplicated logic, at the cost of two rebuild() calls once per Save (not per frame).
+         pendingReframe is explicitly held off during the snapshot's own rebuild() and restored
+         before the live one, since both calls share that one global flag and letting the snapshot's
+         call consume it would frame the camera to the wrong geometry and silently drop the live
+         model's own pending reframe. A simple height-only delta readout (both totalHeightM() calls
+         are mode-agnostic and always correct) rather than a volume/area comparison — those differ
+         in meaning across modes (Helix reports surface area, not volume; Free measures via numeric
+         integration) and getting that normalization wrong across six modes felt like a worse outcome
+         than a smaller but honestly-correct comparison. Found and fixed a real bug while wiring the
+         toggle switch: its plain "switch" class would have been swept into the generic
+         overlay-switch initializer (keyed to state.overlays[key], which this isn't) and gotten a
+         second, conflicting click handler — split off a .switch-standalone class sharing the same
+         CSS so the generic loop's selector no longer matches it. Added 16 new audit_deploy.js
+         checks (94/94 passing).
 v1.46.0 - 2026-07-19 - Collapsed the Export section's explanatory text by default, per a screenshot
          of Advanced mode showing four back-to-back paragraphs (PNG export, share link, loft-profiles
          JSON, Dynamo script) all expanded at once — exactly the density Simple/Advanced (v1.44.0)
@@ -1149,16 +1203,16 @@ v1.0.0 - 2026-07-17 - Initial build. Twist operation on four cross-section prese
   }
   .toggle-row:last-child{border-bottom:none;}
   .toggle-row.disabled{opacity:0.4; pointer-events:none;}
-  .switch{
+  .switch, .switch-standalone{
     width:34px; height:18px; background:var(--line); position:relative;
     cursor:pointer; flex-shrink:0;
   }
-  .switch::after{
+  .switch::after, .switch-standalone::after{
     content:''; position:absolute; width:14px; height:14px; top:2px; left:2px;
     background:var(--paper); transition:left 0.12s;
   }
-  .switch.on{background:var(--prussian);}
-  .switch.on::after{left:18px; background:var(--paper);}
+  .switch.on, .switch-standalone.on{background:var(--prussian);}
+  .switch.on::after, .switch-standalone.on::after{left:18px; background:var(--paper);}
 
   select{
     width:100%; font-family:inherit; color:var(--ink); background:var(--cream);
@@ -1193,6 +1247,7 @@ v1.0.0 - 2026-07-17 - Initial build. Twist operation on four cross-section prese
     cursor:pointer;
   }
   .btn.secondary{background:transparent; color:var(--ink);}
+  .btn.secondary.active{border-color:var(--brick); color:var(--brick);}
 
   header #helpBtn{
     padding:3px 11px; font-size:0.78rem; line-height:1.4;
@@ -1346,6 +1401,7 @@ v1.0.0 - 2026-07-17 - Initial build. Twist operation on four cross-section prese
 
     <section class="group">
       <h3>Deformation parameters</h3>
+      <button class="btn secondary" id="playPauseBtn" style="width:100%; margin-bottom:12px;">▶ Play</button>
       <div id="twistParamsBlock">
         <div class="slider-row">
           <div class="top"><span>α_max (twist of top plane T)</span><span class="val" id="alphaVal">120°</span></div>
@@ -1419,11 +1475,11 @@ v1.0.0 - 2026-07-17 - Initial build. Twist operation on four cross-section prese
         <div id="helixLineParams">
           <div class="slider-row">
             <div class="top"><span>inner radius (void at axis)</span><span class="val" id="helixRInnerVal">0.3 m</span></div>
-            <input type="range" id="helixRInnerSlider" min="0" max="3" step="0.1" value="0.3">
+            <input type="range" id="helixRInnerSlider" min="0" max="5" step="0.1" value="0.3">
           </div>
           <div class="slider-row">
             <div class="top"><span>outer radius</span><span class="val" id="helixROuterVal">2.2 m</span></div>
-            <input type="range" id="helixROuterSlider" min="0.5" max="6" step="0.1" value="2.2">
+            <input type="range" id="helixROuterSlider" min="0.5" max="20" step="0.1" value="2.2">
           </div>
         </div>
         <div id="helixCircleParams" style="display:none;">
@@ -1458,6 +1514,15 @@ v1.0.0 - 2026-07-17 - Initial build. Twist operation on four cross-section prese
           <div class="top"><span>pitch (rise per turn)</span><span class="val" id="helixPitchVal">3.0 m</span></div>
           <input type="range" id="helixPitchSlider" min="0.5" max="8" step="0.1" value="3">
           <div style="font-size:0.72rem; color:var(--muted); margin-top:2px;" id="helixTotalRiseNote"></div>
+        </div>
+        <div style="font-size:0.78rem; color:var(--muted); margin:14px 0 8px;">
+          Case study (real spiral-ramp building)
+        </div>
+        <button class="btn secondary" data-casestudy="guggenheim" style="width:100%; font-size:0.74rem;">Guggenheim NYC</button>
+        <div style="font-size:0.68rem; line-height:1.4; margin-top:4px;" class="caveat">
+          Turns and total rise are sourced; outer radius is sourced too but only as an average — the
+          real ramp widens with height (100ft dia. at bottom to 128ft at top) rather than holding one
+          radius. Inner (void) radius is an illustrative estimate.
         </div>
       </div>
       <div id="resolutionBlock" class="slider-row">
@@ -1520,6 +1585,25 @@ v1.0.0 - 2026-07-17 - Initial build. Twist operation on four cross-section prese
         <div class="switch" data-toggle="colorblindPalette"></div>
       </div>
       <button class="btn secondary" id="exportPanelScheduleBtn" style="width:100%; margin-top:8px; display:none;">Export panel schedule (.csv)</button>
+    </section>
+
+    <section class="group" id="compareSection">
+      <h3>Compare</h3>
+      <button class="btn secondary" id="saveSnapshotBtn" style="width:100%;">Save snapshot</button>
+      <details class="info-toggle">
+        <summary>What does this do?</summary>
+        <div class="info-body">
+          Captures the current shape as a translucent reference ghost, so you can change any
+          parameter — even switch Operation entirely — and see exactly how the new shape differs,
+          overlaid in the same view rather than side by side. The snapshot lives only in this
+          session; it isn't saved, shared, or affected by Reset Values.
+        </div>
+      </details>
+      <div class="toggle-row">
+        <span>Show comparison</span>
+        <div class="switch-standalone" id="showComparisonSwitch"></div>
+      </div>
+      <div style="font-size:0.72rem; color:var(--muted); margin-top:2px;" id="compareDeltaNote"></div>
     </section>
 
     <section class="group" id="exportSection">
@@ -1596,7 +1680,7 @@ v1.0.0 - 2026-07-17 - Initial build. Twist operation on four cross-section prese
 <script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
 <script src="https://cdn.jsdelivr.net/npm/three@0.128.0/examples/js/controls/OrbitControls.js"></script>
 <script>
-const APP_VERSION = '1.46.0';
+const APP_VERSION = '1.47.0';
 
 // ---------- toast ----------
 let toastTimer=null;
@@ -1657,6 +1741,20 @@ const HELP_HTML = `
   <p>Pick a footprint preset (square, triangle, hexagon, star) and set real-world Width/Depth —
   every preset scales to whatever you enter, in meters or feet. Height is set as floors ×
   floor-to-floor height (or, in Helix, turns × pitch) rather than one abstract number.</p>
+
+  <h4>Play / Pause</h4>
+  <p>Animates the current Operation's own deformation parameter(s) between a neutral starting value
+  and whatever's currently dialed in, looping back and forth so you can watch the deformation happen
+  rather than only comparing two static slider positions. Dragging any slider, switching Operation,
+  loading a case study, or Reset all stop it automatically — sliders and the animation would
+  otherwise fight over the same values every frame.</p>
+
+  <h4>Compare</h4>
+  <p>"Save snapshot" (Advanced view) freezes the current shape as a translucent reference ghost, so
+  you can change parameters — even switch Operation entirely — and see exactly how the new shape
+  differs, overlaid in the same view. "Show comparison" toggles the ghost on and off; a new "Save
+  snapshot" replaces it. The snapshot lives only in this browser session — it isn't saved, shared
+  via "Copy share link," or affected by Reset Values.</p>
 
   <h4>Editing values</h4>
   <p>Every slider's readout is also a click-to-type field: click the number, type a new one,
@@ -3654,6 +3752,7 @@ function applyModeChrome(){
 }
 [...modeGrid.children].forEach(btn=>{
   btn.addEventListener('click', ()=>{
+    if(animPlayer) stopAnimation();
     state.mode = btn.dataset.mode;
     applyModeChrome();
     pendingReframe = true;
@@ -3727,7 +3826,7 @@ function persistUIPrefs(){
 // export path. Simple mode hides exactly these four, consistently, regardless of which Operation is
 // selected — Operation/Cross-section/Deformation-parameters/Reference stay visible in both modes,
 // since those are "the shape itself," not tooling around it.
-const ADVANCED_ONLY_IDS = ['unitsSection', 'projectionSection', 'resolutionBlock', 'overlaysSection', 'exportSection'];
+const ADVANCED_ONLY_IDS = ['unitsSection', 'projectionSection', 'resolutionBlock', 'overlaysSection', 'compareSection', 'exportSection'];
 function applyUIMode(mode){
   uiPrefs.uiMode = mode;
   const showAdvanced = mode === 'advanced';
@@ -3873,8 +3972,8 @@ syncShearSliderRange();
 function syncHelixSliderRanges(){
   if(state.units === 'metric'){
     helixPitchSlider.min = 0.5; helixPitchSlider.max = 8; helixPitchSlider.step = 0.1;
-    helixRInnerSlider.min = 0; helixRInnerSlider.max = 3; helixRInnerSlider.step = 0.1;
-    helixROuterSlider.min = 0.5; helixROuterSlider.max = 6; helixROuterSlider.step = 0.1;
+    helixRInnerSlider.min = 0; helixRInnerSlider.max = 5; helixRInnerSlider.step = 0.1;
+    helixROuterSlider.min = 0.5; helixROuterSlider.max = 20; helixROuterSlider.step = 0.1;
     helixTubeRSlider.min = 0.05; helixTubeRSlider.max = 1; helixTubeRSlider.step = 0.01;
     helixTubeOffsetSlider.min = 0; helixTubeOffsetSlider.max = 4; helixTubeOffsetSlider.step = 0.1;
     helixPitchSlider.value = state.helixPitchM.toFixed(1);
@@ -3884,8 +3983,8 @@ function syncHelixSliderRanges(){
     helixTubeOffsetSlider.value = state.helixTubeOffsetM.toFixed(1);
   } else {
     helixPitchSlider.min = 1.5; helixPitchSlider.max = 26; helixPitchSlider.step = 0.5;
-    helixRInnerSlider.min = 0; helixRInnerSlider.max = 10; helixRInnerSlider.step = 0.5;
-    helixROuterSlider.min = 1.5; helixROuterSlider.max = 20; helixROuterSlider.step = 0.5;
+    helixRInnerSlider.min = 0; helixRInnerSlider.max = 16; helixRInnerSlider.step = 0.5;
+    helixROuterSlider.min = 1.5; helixROuterSlider.max = 65; helixROuterSlider.step = 0.5;
     helixTubeRSlider.min = 0.15; helixTubeRSlider.max = 3; helixTubeRSlider.step = 0.05;
     helixTubeOffsetSlider.min = 0; helixTubeOffsetSlider.max = 13; helixTubeOffsetSlider.step = 0.5;
     helixPitchSlider.value = (state.helixPitchM * M_TO_FT).toFixed(1);
@@ -4151,6 +4250,7 @@ const MODE_DEFAULTS = {
   helix: { helixGenerator: 'line', helixTurns: 3, helixPitchM: 3.0, helixRInnerM: 0.3, helixROuterM: 2.2, helixTubeRM: 0.25, helixTubeOffsetM: 1.5 },
 };
 function resetModeValues(mode){
+  if(animPlayer) stopAnimation();
   if(mode === 'ffd'){
     state.ffdOffsets = [0,0,0,0,0,0,0,0].map(()=>({dx:0, dy:0, dz:0}));
   } else {
@@ -4199,7 +4299,15 @@ document.querySelectorAll('.reset-btn').forEach(btn=>{
 // straight-edged cross-section translated along a straight lean the way Shear models it. That's the
 // same compound-deformation mismatch that got Shanghai Tower and The Bow rejected — the original
 // caveat (nonlinear lean rate) understated how far off the geometry actually is. Shear has no case
-// study for now, same as Bend and Helix.
+// study for now, same as Bend.
+//
+// v1.47.0: searched specifically for a real single-axis Bend candidate (a tower that curves along
+// its vertical axis without also twisting or tapering) — came up empty. Real "curved" supertalls
+// almost always compound bend with something else (twist, taper, or an in-plan crescent like The
+// Bow), the same pattern that's already rejected several buildings above; nothing held up as an
+// honest single-operation match. Left without a case study rather than force a compound building in
+// with an understated caveat, the exact mistake Capital Gate was. Helix, previously also empty, now
+// has one: the Guggenheim Museum NYC's spiral ramp (see its entry below).
 const CASE_STUDIES = {
   turningtorso: {
     mode: 'twist', label: 'Turning Torso',
@@ -4226,11 +4334,33 @@ const CASE_STUDIES = {
     // still an estimate, not a sourced ratio.
     fields: { preset:'square', taperV:0.4, taperW:0.4, floors:95, floorHeightM:309.6/95, footprintWidthM:28, footprintDepthM:28 },
     toast: 'The Shard — 309.6m, 95 floors, tapers to a near-point (Piano, London, 2012)'
+  },
+  guggenheim: {
+    mode: 'helix', label: 'Guggenheim NYC',
+    // Helix's first case study — Bend and Shear currently have none; see the rejection-criteria
+    // comment above CASE_STUDIES for why (Bend specifically: searched for a real single-axis-curve
+    // tower with no twist/taper compounded in, found nothing that held up — most "curved" supertalls
+    // combine bend with twist or taper the same way Shanghai Tower combines twist+taper).
+    //
+    // Turns (6) and rise (~92ft/28m to the oculus, giving pitch = height/turns) are sourced across
+    // multiple sources. Outer radius is sourced too, but only as an AVERAGE: the real ramp is not a
+    // constant radius — published bottom/top diameters are 100ft and 128ft, i.e. the ramp genuinely
+    // widens as it climbs, which Helix's Line generator (fixed inner/outer radius for the whole
+    // sweep) can't represent — same kind of single-parameter simplification as The Shard's taper
+    // estimate above, not the compound-geometry mismatch that got Capital Gate/Shanghai Tower
+    // rejected outright. Inner (void) radius has no published figure and is a genuine illustrative
+    // estimate, same status as every other case study's footprint size. helixROuterSlider/
+    // helixRInnerSlider were widened this version (previously capped at 6m/3m, a "generic explorer"
+    // scale) specifically because this building's sourced outer radius (~17.4m) exceeded the old cap
+    // — same reasoning that already sized footprint sliders up to 30m for real buildings.
+    fields: { helixGenerator:'line', helixTurns:6, helixPitchM:(92*0.3048)/6, helixRInnerM:4.5, helixROuterM:(114/2)*0.3048 },
+    toast: 'Guggenheim Museum NYC — 6-turn spiral ramp, ~28m/92ft rise (Frank Lloyd Wright, 1959)'
   }
 };
 function loadCaseStudy(key){
   const cs = CASE_STUDIES[key];
   if(!cs) return;
+  if(animPlayer) stopAnimation();
   state.mode = cs.mode;
   Object.assign(state, cs.fields);
   // Reposition every affected control to match, same approach resetModeValues uses — unit-aware
@@ -4243,9 +4373,11 @@ function loadCaseStudy(key){
   shearDXSlider.value = state.shearDXM;
   shearDYSlider.value = state.shearDYM;
   floorsSlider.value = state.floors;
+  helixTurnsSlider.value = state.helixTurns;
   syncFloorHeightSliderRange();
   syncFootprintSliderRange();
   syncShearSliderRange();
+  syncHelixSliderRanges();
   applyModeChrome();
   syncSliderLabels(); pendingReframe = true; persist(); rebuild();
   toast(cs.toast);
@@ -4253,6 +4385,83 @@ function loadCaseStudy(key){
 document.querySelectorAll('[data-casestudy]').forEach(btn=>{
   btn.addEventListener('click', ()=> loadCaseStudy(btn.dataset.casestudy));
 });
+
+// ---------- animation (v1.47.0) ----------
+// One Play/Pause button (top of Deformation parameters, mode-agnostic — not duplicated per mode)
+// ping-pongs the CURRENT mode's own primary deformation parameter(s) between a neutral starting
+// value and whatever's currently dialed in, so the deformation can be watched happening instead of
+// only ever compared as two static slider positions.
+//
+// Deliberately mutates `state` directly each animation frame and restores the exact pre-animation
+// values on stop, rather than threading a temporary override through computeLayerPoint/
+// buildDeformedGeometry — every geometry function already reads straight from `state`, and
+// duplicating that plumbing just to avoid a few frames of temporary mutation would be a much larger,
+// riskier change to code that's already verified correct elsewhere. Runs inside the existing
+// animate() rAF loop (not a second one) and calls the very same rebuild() FFD handle dragging
+// already calls on every single pointermove (see that section below) — so a full rebuild() every
+// animation frame isn't a new class of per-frame cost this app takes on, just a new source of an
+// already-accepted one.
+const ANIMATABLE_PARAMS = {
+  twist: [{key:'alphaMax', from:0}],
+  taper: [{key:'taperV', from:1}, {key:'taperW', from:1}],
+  shear: [{key:'shearDXM', from:0}, {key:'shearDYM', from:0}],
+  bend:  [{key:'bendBetaMax', from:0}],
+  // 0 turns would degenerate to a zero-length sweep; a small non-zero floor keeps the geometry
+  // well-defined at the very start of the loop instead of a one-frame flash of nothing.
+  helix: [{key:'helixTurns', from:0.05}],
+};
+const ANIM_HALF_CYCLE_MS = 2200; // one direction of the ping-pong; full loop is double this
+let animPlayer = null; // null when not animating
+
+function easeInOutCubic(t){ return t < 0.5 ? 4*t*t*t : 1 - Math.pow(-2*t+2, 3)/2; }
+
+const playPauseBtn = document.getElementById('playPauseBtn');
+function startAnimation(){
+  if(state.mode === 'ffd'){
+    animPlayer = { startedAt: performance.now(), targetOffsets: state.ffdOffsets.map(o=>({...o})) };
+  } else {
+    const params = ANIMATABLE_PARAMS[state.mode] || [];
+    if(params.length === 0) return; // every mode is covered above; defensive only
+    animPlayer = { startedAt: performance.now(), params: params.map(p=>({ key:p.key, from:p.from, to:state[p.key] })) };
+  }
+  playPauseBtn.textContent = '⏸ Pause';
+  playPauseBtn.classList.add('active');
+}
+function stopAnimation(){
+  if(!animPlayer) return;
+  // Restore the real dialed-in values exactly (not whatever the easing curve last landed on) —
+  // stopping mid-cycle must never leave the sliders and `state` disagreeing.
+  if(animPlayer.params) animPlayer.params.forEach(p=>{ state[p.key] = p.to; });
+  else if(animPlayer.targetOffsets) state.ffdOffsets = animPlayer.targetOffsets;
+  animPlayer = null;
+  playPauseBtn.textContent = '▶ Play';
+  playPauseBtn.classList.remove('active');
+  rebuild();
+}
+function tickAnimation(){
+  if(!animPlayer) return;
+  const elapsed = performance.now() - animPlayer.startedAt;
+  const cyclePos = (elapsed % (ANIM_HALF_CYCLE_MS*2)) / ANIM_HALF_CYCLE_MS; // 0..2
+  const t = easeInOutCubic(cyclePos <= 1 ? cyclePos : (2 - cyclePos)); // ping-pong 0->1->0, eased
+  if(animPlayer.params) animPlayer.params.forEach(p=>{ state[p.key] = p.from + (p.to - p.from) * t; });
+  else if(animPlayer.targetOffsets) state.ffdOffsets = animPlayer.targetOffsets.map(o=>({ dx:o.dx*t, dy:o.dy*t, dz:o.dz*t }));
+  rebuild();
+}
+playPauseBtn.addEventListener('click', ()=>{
+  if(animPlayer) stopAnimation(); else startAnimation();
+});
+// A manual slider drag mid-animation would otherwise fight the animation loop for the same `state`
+// field every frame — stop first so the drag wins outright, same as any other interaction would.
+// pointerdown always fires before any subsequent 'input'/'change' from the same drag, so this is
+// safe regardless of other listener registration order on the same element.
+document.querySelectorAll('aside input[type="range"]').forEach(sl=>{
+  sl.addEventListener('pointerdown', ()=>{ if(animPlayer) stopAnimation(); });
+});
+// Switching Operation, loading a case study, or Reset mid-animation is handled by calling
+// stopAnimation() from inside those functions themselves (loadCaseStudy, resetModeValues, and the
+// mode-switch handler) rather than via separately-registered listeners here — a second listener
+// isn't guaranteed to run before the feature's own handler on the same click, and running after
+// would restore stale pre-switch values over whatever the switch just set.
 
 // ---------- loft profiles (.json) export ----------
 // ---------- view (.png) export ----------
@@ -4286,6 +4495,101 @@ function exportViewPNG(){
 }
 document.getElementById('exportViewPngBtn').addEventListener('click', exportViewPNG);
 document.getElementById('copyShareLinkBtn').addEventListener('click', copyShareLink);
+
+// ---------- comparison mode (v1.47.0) ----------
+// "Save snapshot" clones the CURRENT solid as a translucent ghost sitting in the scene alongside the
+// live model, so changing parameters after saving shows exactly how the new shape differs — overlaid
+// in the same view, not a second synced viewport. A literal side-by-side implementation would need a
+// second independent scene/camera/renderer/controls stack; this app's architecture (one of each,
+// referenced directly throughout rebuild() and every overlay function) was never built to host more
+// than one, and duplicating that whole stack would be a much larger, riskier restructuring than the
+// feature is worth. The overlay approach instead reuses the existing rebuild() pipeline completely
+// unchanged, for the snapshot exactly as much as the live model.
+//
+// Ghost geometry: temporarily swap `state` to the snapshot's captured values, call the real
+// unmodified rebuild() (so the snapshot goes through exactly the same, already-verified geometry
+// path as the live model — helix's different builder, FFD's trilinear blend, any mode — with zero
+// duplicated geometry logic), clone solidGroup's resulting mesh(es) into ghostGroup, then swap state
+// back and call rebuild() again for the live geometry. Costs two rebuild() calls, but only once, at
+// the moment "Save snapshot" is clicked — not per frame, unlike animation's continuous rebuild().
+//
+// pendingReframe is explicitly held off during the snapshot's own rebuild() and restored before the
+// live one: rebuild() reframes the camera itself when pendingReframe is true (v1.23.0), and since
+// both calls share that one global flag, letting the snapshot's rebuild() consume it would frame the
+// camera to the SNAPSHOT's bounding box and leave the live geometry's own pending reframe silently
+// dropped.
+const MODEL_STATE_KEYS = Object.keys(state); // every field that defines "the shape" — the same
+                                               // universe encodeStateToURL() and localStorage
+                                               // persistence already treat as "the model"
+let snapshotState = null;   // captured model fields at the moment of the last "Save snapshot"
+let snapshotHeightM = null; // captured alongside it, for the delta readout
+const ghostGroup = new THREE.Group();
+scene.add(ghostGroup); // scene directly, not solidGroup/overlayGroup — same reasoning as groundGrid:
+                        // it must survive solidGroup being cleared every rebuild(), and must not be
+                        // swept into camera-fit Box3 calculations (both fit functions scope to
+                        // solidGroup only, exactly the property this relies on).
+const ghostMaterial = new THREE.MeshStandardMaterial({
+  color: 0xb23a2e, transparent: true, opacity: 0.28, depthWrite: false, side: THREE.DoubleSide
+}); // hardcoded to --brick's light-theme hex rather than a CSS var — three.js materials need an
+    // actual numeric color, and "reference/before" is the same role brick already carries in the
+    // UI; letting it shift with the Blueprint theme would work against that reused meaning.
+function disposeGhostGroup(){
+  ghostGroup.children.forEach(m=>m.geometry.dispose());
+  while(ghostGroup.children.length) ghostGroup.remove(ghostGroup.children[0]);
+}
+function updateCompareDeltaNote(){
+  const note = document.getElementById('compareDeltaNote');
+  if(!snapshotState){ note.textContent = ''; return; }
+  const u = unitLabels();
+  const liveH = totalHeightM();
+  const deltaH = liveH - snapshotHeightM;
+  const sign = deltaH >= 0 ? '+' : '';
+  note.textContent = `Snapshot height ${toDisplayLen(snapshotHeightM).toFixed(1)}${u.len} · ` +
+    `live ${toDisplayLen(liveH).toFixed(1)}${u.len} · Δ ${sign}${toDisplayLen(deltaH).toFixed(1)}${u.len}`;
+}
+function rebuildGhostFromSnapshot(){
+  if(!snapshotState) return;
+  disposeGhostGroup();
+  const liveBackup = {};
+  MODEL_STATE_KEYS.forEach(k=>{ liveBackup[k] = state[k]; });
+  const hadPendingReframe = pendingReframe;
+  pendingReframe = false; // this rebuild() is the snapshot's — must not drive the camera
+  Object.assign(state, snapshotState);
+  rebuild();
+  solidGroup.children.forEach(m=>{
+    const clone = m.clone();
+    clone.material = ghostMaterial;
+    clone.visible = true; // force visible even if Panel flatness had auto-hidden the solid when the snapshot was saved
+    ghostGroup.add(clone);
+  });
+  Object.assign(state, liveBackup);
+  pendingReframe = hadPendingReframe; // now let the LIVE rebuild() honor whatever was actually pending
+  rebuild();
+  updateCompareDeltaNote();
+}
+function saveSnapshot(){
+  if(animPlayer) stopAnimation(); // otherwise this would capture a random mid-animation frame,
+                                    // not the dialed-in target values the user actually set
+  snapshotState = {};
+  MODEL_STATE_KEYS.forEach(k=>{
+    const v = state[k];
+    snapshotState[k] = (v && typeof v === 'object') ? JSON.parse(JSON.stringify(v)) : v; // deep-copy ffdOffsets/overlays
+  });
+  snapshotHeightM = totalHeightM();
+  rebuildGhostFromSnapshot();
+  showComparison = true;
+  ghostGroup.visible = true;
+  document.getElementById('showComparisonSwitch').classList.add('on');
+  toast('Snapshot saved — showing comparison');
+}
+let showComparison = false;
+document.getElementById('saveSnapshotBtn').addEventListener('click', saveSnapshot);
+document.getElementById('showComparisonSwitch').addEventListener('click', ()=>{
+  if(!snapshotState){ toast('Save a snapshot first'); return; }
+  showComparison = !showComparison;
+  ghostGroup.visible = showComparison;
+  document.getElementById('showComparisonSwitch').classList.toggle('on', showComparison);
+});
 
 // ---------- loft profiles (.json) export ----------
 // Exports N evenly spaced cross-section profiles up the height, meant to be consumed by a script
@@ -4825,6 +5129,7 @@ EDITABLE_FIELDS.forEach(bindEditableValue);
 // ---------- render loop ----------
 function animate(){
   requestAnimationFrame(animate);
+  if(animPlayer) tickAnimation();
   // v1.33.0: near/far used to only ever be set once per view-fit (Home/Top/Front/rebuild), sized
   // for that fit's own distance — scrolling to manually zoom out further than that could exceed
   // the far plane and clip the model out of view entirely, which read as "can't zoom out any

@@ -371,6 +371,67 @@ check('the four action buttons (Export view, Copy share link, Export loft profil
   /id="exportViewPngBtn"[\s\S]{0,40}<\/button>\s*<details/.test(src) &&
   /id="copyShareLinkBtn"[\s\S]{0,40}<\/button>\s*<details/.test(src));
 
+/* ===================== v1.47.0 — case study, animation, comparison mode ===================== */
+sectionHeader('v1.47.0 — Guggenheim case study');
+check('guggenheim exists in CASE_STUDIES with mode "helix" and the Line generator (an open ramp, not Circle/Pipe which model a solid tube/screw — wrong shape for an exhibition ramp)',
+  /guggenheim: \{\s*\n\s*mode: 'helix'/.test(src) && /helixGenerator:'line'/.test(src.match(/guggenheim: \{[\s\S]*?\n  \}/)?.[0] || ''));
+check('Guggenheim\'s sourced outer radius (~17.4m) and inner-radius estimate (4.5m) both fit within the widened slider maxes (20m/5m) with margin, not right at or past the ceiling',
+  (function(){
+    const outerM = (114/2)*0.3048, innerM = 4.5;
+    return outerM < 20 && innerM < 5;
+  })());
+check('helixROuterSlider/helixRInnerSlider metric maxes were actually widened (20m/5m), not left at the old generic-exploration scale (6m/3m) that Guggenheim\'s real radius would have exceeded',
+  (function(){
+    const m = src.match(/function syncHelixSliderRanges\(\)\{[\s\S]*?if\(state\.units === 'metric'\)\{[\s\S]*?\n  \} else/);
+    return !!m && m[0].includes('helixROuterSlider.max = 20') && m[0].includes('helixRInnerSlider.max = 5');
+  })());
+check('loadCaseStudy() now syncs helixTurnsSlider.value and calls syncHelixSliderRanges() — the same one-directional gap the v1.42.0 footprint-reset fix caught, just never triggered before since Helix never had a case study to expose it',
+  (function(){
+    const m = src.match(/function loadCaseStudy\(key\)\{[\s\S]*?\n\}/);
+    return !!m && m[0].includes('helixTurnsSlider.value = state.helixTurns;') && m[0].includes('syncHelixSliderRanges();');
+  })());
+
+sectionHeader('v1.47.0 — animation');
+check('ANIMATABLE_PARAMS covers all five non-FFD modes (twist/taper/shear/bend/helix) — FFD is handled separately in startAnimation, not silently missing from the table',
+  ['twist:', 'taper:', 'shear:', 'bend:', 'helix:'].every(k=>{
+    const m = src.match(/const ANIMATABLE_PARAMS = \{[\s\S]*?\n\};/);
+    return !!m && m[0].includes(k);
+  }));
+check('startAnimation() captures each parameter\'s "to" target live from `state` at call time (state[p.key]), not a hardcoded constant, so it always animates toward whatever is actually dialed in',
+  /to:state\[p\.key\]/.test(src));
+check('stopAnimation() restores the exact pre-animation dialed-in value (state[p.key] = p.to), not whatever the easing curve last landed on — stopping mid-cycle must never leave state disagreeing with the sliders',
+  /animPlayer\.params\.forEach\(p=>\{ state\[p\.key\] = p\.to; \}\)/.test(src));
+check('tickAnimation() ping-pongs (0->1->0) through an easing function rather than just looping 0->1 and snapping back',
+  /cyclePos <= 1 \? cyclePos : \(2 - cyclePos\)/.test(src) && /easeInOutCubic/.test(src));
+check('animate() only calls tickAnimation() when animPlayer is truthy — not unconditionally every frame regardless of play state',
+  /if\(animPlayer\) tickAnimation\(\);/.test(src));
+check('stopAnimation() is called from inside loadCaseStudy/resetModeValues/the mode-switch handler themselves (not via a second separately-registered listener, which isn\'t guaranteed to run before the feature\'s own handler and could restore stale values over what the switch just set)',
+  (function(){
+    const lcs = src.match(/function loadCaseStudy\(key\)\{[\s\S]*?\n\}/)?.[0] || '';
+    const rmv = src.match(/function resetModeValues\(mode\)\{[\s\S]*?\n\}/)?.[0] || '';
+    return lcs.includes('if(animPlayer) stopAnimation();') && rmv.includes('if(animPlayer) stopAnimation();');
+  })());
+check('every range slider in the sidebar stops a running animation on pointerdown, so a manual drag doesn\'t fight the animation loop for the same state field every frame',
+  /aside input\[type="range"\]/.test(src) && /if\(animPlayer\) stopAnimation\(\); \}\);\s*\n\}\);/.test(src));
+
+sectionHeader('v1.47.0 — comparison mode');
+check('the Compare toggle uses a separate .switch-standalone class, not .switch — the generic overlay-switch initializer queries .switch and is keyed to state.overlays[key], which this toggle is not, so sharing the class would wire it a second, conflicting click handler',
+  /id="showComparisonSwitch">/.test(src) && /class="switch-standalone" id="showComparisonSwitch"/.test(src) && !/class="switch" id="showComparisonSwitch"/.test(src));
+check('rebuildGhostFromSnapshot() holds pendingReframe false during the snapshot\'s own rebuild() and restores the original value before the live rebuild() — both calls share one global flag, so letting the snapshot\'s call consume it would frame the camera to the wrong geometry and silently drop the live model\'s pending reframe',
+  (function(){
+    const m = src.match(/function rebuildGhostFromSnapshot\(\)\{[\s\S]*?\n\}/);
+    return !!m && m[0].includes('pendingReframe = false;') && m[0].includes('pendingReframe = hadPendingReframe;');
+  })());
+check('ghostGroup is added to `scene` directly, not solidGroup/overlayGroup — same reasoning already verified for groundGrid: it must survive solidGroup being cleared every rebuild() and must not be swept into either camera-fit function\'s Box3',
+  /scene\.add\(ghostGroup\)/.test(src) && !/solidGroup\.add\(ghostGroup\)|overlayGroup\.add\(ghostGroup\)/.test(src));
+check('saveSnapshot() stops a running animation before capturing state — otherwise the snapshot would freeze a random mid-animation transient frame instead of the actual dialed-in target values',
+  (function(){
+    const m = src.match(/function saveSnapshot\(\)\{[\s\S]*?\n\}/);
+    return !!m && m[0].trim().startsWith('function saveSnapshot(){\n  if(animPlayer) stopAnimation();');
+  })());
+check('the Compare section is in ADVANCED_ONLY_IDS (tooling around the shape, not "the shape itself") — consistent with Overlays/Export/Units/Projection, not left visible in Simple mode by oversight',
+  /const ADVANCED_ONLY_IDS = \[[^\]]*'compareSection'[^\]]*\];/.test(src));
+
 /* ===================== Summary ===================== */
 console.log(`\n${BOLD}${'-'.repeat(40)}${RESET}`);
 console.log(`${GREEN}${pass} passed${RESET}, ${fail ? RED : DIM}${fail} failed${RESET}`);
