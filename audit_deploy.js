@@ -543,10 +543,10 @@ check('footprint sliders were widened to accommodate Lotte Super Tower\'s 70m sq
 
 /* ===================== v1.51.1 — ground grid resync ===================== */
 sectionHeader('v1.51.1 — ground grid resync');
-check('syncGroundGridExtent() derives the grid extent from the built geometry\'s own bounding radius (60% headroom, clamped [300,4000]) instead of a fixed 300-unit extent',
+check('syncGroundGridExtent() takes the max of the old bounding-radius floor and the new camera-frustum-visible extent, clamped [300,20000] — superseded by v1.51.4 (see that section) but the radius-floor fallback and clamp floor are unchanged',
   (function(){
     const m = src.match(/function syncGroundGridExtent\(radius\)\{[\s\S]*?\n\}/);
-    return !!m && m[0].includes('Math.min(4000, Math.max(300,') && m[0].includes('diameter*1.6');
+    return !!m && m[0].includes('Math.min(20000, Math.max(300,') && m[0].includes('diameter*1.6') && m[0].includes('computeVisibleGroundExtent()');
   })());
 check('syncGroundGridExtent() only rebuilds the grid when the needed extent actually changes (a real diff check), not on every rebuild() call',
   /if\(Math\.abs\(desired - groundGridExtent\) > 1e-6\)\{/.test(src));
@@ -563,6 +563,38 @@ check('state.morphBlend defaults to 1.0 (full morph — matches pre-v1.51.2 alwa
   /morphBlend:\s*1\.0/.test(src));
 check('startAnimation() no longer special-cases morph with its own toast — it falls through to the same generic ANIMATABLE_PARAMS path FFD\'s non-empty branch and every axis-based mode already use',
   !/toast\(['"][^'"]*morph[^'"]*animat/i.test(src) && !/mode === 'morph'[\s\S]{0,80}toast\(/.test(src));
+
+/* ===================== v1.51.3 — dynamic Morph tagline ===================== */
+sectionHeader('v1.51.3 — dynamic Morph tagline');
+check('morphTagline() builds the tagline from the CURRENT state.preset/morphToPreset via PRESET_LABELS, not a static string',
+  /function morphTagline\(\)\{ return `\$\{PRESET_LABELS\[state\.preset\]\} → \$\{PRESET_LABELS\[state\.morphToPreset\]\}, live`; \}/.test(src));
+check('applyModeChrome() uses morphTagline() when mode is morph, and the static TAGLINES table otherwise (TAGLINES itself has no morph entry anymore)',
+  /document\.getElementById\('modeTagline'\)\.textContent = state\.mode === 'morph' \? morphTagline\(\) : TAGLINES\[state\.mode\];/.test(src) && !/TAGLINES = \{[^}]*morph:/.test(src));
+check('the From-shape preset-button handler calls applyModeChrome() after rebuild() so the tagline updates live when it\'s Morph\'s From shape being changed',
+  /toast\(PRESET_LABELS\[key\] \+ ' profile loaded'\);/.test(src) && /applyModeChrome\(\); \/\/ refreshes the tagline if this was Morph's From-shape picker/.test(src));
+check('the To-shape (morphToGrid) preset-button handler calls applyModeChrome() after rebuild() so the tagline updates live when the To shape changes',
+  /applyModeChrome\(\); \/\/ refreshes the tagline to reflect the new To-shape/.test(src));
+
+/* ===================== v1.51.4 — camera-frustum ground grid extent ===================== */
+sectionHeader('v1.51.4 — camera-frustum ground grid extent');
+check('computeVisibleGroundExtent() raycasts all 4 viewport corners against the grid\'s own y=-0.05 plane and returns the farthest valid hit distance from the origin',
+  (function(){
+    const m = src.match(/function computeVisibleGroundExtent\(\)\{[\s\S]*?\n\}/);
+    return !!m && m[0].includes("new THREE.Plane(new THREE.Vector3(0,1,0), 0.05)") && m[0].includes('Math.hypot(hit.x, hit.z)');
+  })());
+check('computeVisibleGroundExtent() calls camera.updateMatrixWorld() before raycasting — the real bug caught by headless-browser testing: without it, raycasts right after a camera move read a stale transform',
+  (function(){
+    const m = src.match(/function computeVisibleGroundExtent\(\)\{[\s\S]*?\n\}/);
+    return !!m && /^\s*camera\.updateMatrixWorld\(\);/m.test(m[0]);
+  })());
+check('syncGroundGridExtent() takes Math.max of the old radius-based floor and 1.1x the camera-frustum-visible extent, not just one or the other',
+  /Math\.max\(radiusFloor, visible\)/.test(src));
+check('the Top/Front/Home view buttons each call syncGroundGridExtent(lastModelRadius) right after their frameCamera*() call — these reposition the camera outside of rebuild(), so without this the grid would stay sized for whatever view it last synced under',
+  /frameCameraTop\(\); syncGroundGridExtent\(lastModelRadius\); toast\('Top view'\)/.test(src) &&
+  /frameCameraFront\(\); syncGroundGridExtent\(lastModelRadius\); toast\('Front \/ elevation view'\)/.test(src) &&
+  /frameCameraDefault\(\); syncGroundGridExtent\(lastModelRadius\); toast\('Home view'\)/.test(src));
+check('the 20000 extent cap is a real raise from v1.51.1\'s 4000, not left in place alongside the new frustum-based formula (a stale low cap would silently re-clip the fix on extreme-aspect buildings like Lotte Super Tower)',
+  !/Math\.min\(4000, Math\.max\(300,/.test(src));
 
 /* ===================== Summary ===================== */
 console.log(`\n${BOLD}${'-'.repeat(40)}${RESET}`);

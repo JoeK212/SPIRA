@@ -4,6 +4,40 @@ Interactive explorer of architectural deformation operations — twisting, taper
 Joe.K · axisbim.io
 
 CHANGELOG
+v1.51.4 - 2026-07-19 - Ground grid still cut off visibly in the background, per a user screenshot of
+         the Lotte Super Tower case study — the v1.51.1 fix wasn't enough. Built a real headless-
+         browser test (Playwright + a local three@0.128.0 copy, since the CDN URLs this project
+         loads from are blocked by this sandbox's network allowlist) and raycast the camera's actual
+         4 viewport corners against the ground plane to measure what's really visible: the two BOTTOM
+         corners landed ~450m out (well inside the old 910-unit grid), but the two TOP corners —
+         shallow, near-horizontal rays, unavoidable once the camera pulls back far enough to fit a
+         555m-tall, ~100m-wide tower in frame — landed ~4640m out, over 4x farther than the v1.51.1
+         model-radius formula ever accounted for. That was never a model-SIZE problem the old formula
+         could see; it's a camera-ANGLE problem. Fixed with computeVisibleGroundExtent(): raycasts
+         the 4 viewport corners against y=-0.05 (the grid's own plane) each rebuild and takes the
+         farthest valid hit (with the old diameter*1.6 kept as a floor for near-horizontal views like
+         Front, where an upper corner may not hit the ground at all). Cap raised 4000->20000 so the
+         real fix isn't silently re-clipped. Testing this for real (not just math) caught two further
+         bugs math alone wouldn't have surfaced: (1) the Top/Front/Home view buttons reposition the
+         camera directly, outside of rebuild(), so the grid was going stale in those views without an
+         explicit re-sync — added one; (2) computeVisibleGroundExtent() runs synchronously right
+         after the camera moves, before any render pass has called updateMatrixWorld() on it, so the
+         very first raycast after any camera move was reading a STALE transform and silently under-
+         sizing the grid for exactly one rebuild — fixed with an explicit camera.updateMatrixWorld()
+         at the top of the function. Verified end-to-end: covered (grid extent >= farthest visible
+         ground hit) across Home/Top/Front for Lotte Super Tower, Bend's small-angle case (the
+         original v1.51.1 trigger), Guggenheim's Helix case study, and the plain default Twist shape.
+v1.51.3 - 2026-07-19 - Morph's header tagline is now dynamic ("Square → Ellipse, live") instead of
+         the generic static "shape morph, live" it shipped with in v1.51.0 — per user request while
+         picking a title for a screenshot of the feature. morphTagline() reads PRESET_LABELS[state.
+         preset] and PRESET_LABELS[state.morphToPreset] directly, so it always names whichever pair
+         is actually loaded. Refreshed via applyModeChrome() from three places: the existing
+         mode-switch/case-study-load call sites (unchanged), plus two new calls added to the From-
+         shape and To-shape preset-button click handlers so the tagline updates live as either picker
+         changes, not just on mode switch. Also checked the "volumes match — Cavalieri holds" text's
+         color per a user question about it reading as a warning (red) rather than a confirmation —
+         it uses --brick, which is this app's actual primary accent/CTA color used throughout (active
+         preset buttons, primary buttons), not a semantic error color, so left unchanged.
 v1.51.2 - 2026-07-19 - Fixed Play/Pause doing nothing on Morph. Root cause: Morph had no animatable
          parameter at all — computeLayerPoint's morph branch always fully blended by y/h with
          nothing to ping-pong, so Play just showed a "can't animate" toast. Added state.morphBlend
@@ -1875,7 +1909,7 @@ v1.0.0 - 2026-07-17 - Initial build. Twist operation on four cross-section prese
 <script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
 <script src="https://cdn.jsdelivr.net/npm/three@0.128.0/examples/js/controls/OrbitControls.js"></script>
 <script>
-const APP_VERSION = '1.51.2';
+const APP_VERSION = '1.51.4';
 
 // ---------- toast ----------
 let toastTimer=null;
@@ -3973,6 +4007,7 @@ Object.keys(PROFILES).forEach(key=>{
     btn.classList.add('active');
     pendingReframe = true;
     persist(); rebuild();
+    applyModeChrome(); // refreshes the tagline if this was Morph's From-shape picker
     toast(PRESET_LABELS[key] + ' profile loaded');
   });
   presetGrid.appendChild(btn);
@@ -3990,6 +4025,7 @@ Object.keys(PROFILES).forEach(key=>{
     btn.classList.add('active');
     pendingReframe = true;
     persist(); rebuild();
+    applyModeChrome(); // refreshes the tagline to reflect the new To-shape
     toast('To shape: ' + PRESET_LABELS[key]);
   });
   morphToGrid.appendChild(btn);
@@ -4127,7 +4163,11 @@ const HUD_FORMULA_HTML = {
   helix: 'helical sweep of generator m(v)',
   morph: 'lerp(shape_from, shape_to, z/h)'
 };
-const TAGLINES = { twist: 'twist deformation, live', taper: 'taper deformation, live', shear: 'shear deformation, live', bend: 'bend deformation, live', ffd: 'freeform deformation, live', helix: 'helical sweep, live', morph: 'shape morph, live' };
+const TAGLINES = { twist: 'twist deformation, live', taper: 'taper deformation, live', shear: 'shear deformation, live', bend: 'bend deformation, live', ffd: 'freeform deformation, live', helix: 'helical sweep, live' };
+// Morph's tagline isn't a fixed string like the other modes — it names the actual pair of shapes
+// currently loaded (e.g. "Square → Ellipse, live"), so it stays accurate as the From/To pickers
+// change rather than the generic "shape morph, live" placeholder it shipped with in v1.51.0.
+function morphTagline(){ return `${PRESET_LABELS[state.preset]} → ${PRESET_LABELS[state.morphToPreset]}, live`; }
 const MODE_LABEL = { twist:'Twist', taper:'Taper', shear:'Shear', bend:'Bend', ffd:'Free', helix:'Helix', morph:'Morph' };
 
 const modeGrid = document.getElementById('modeGrid');
@@ -4139,7 +4179,7 @@ function updateReferenceText(){
   document.getElementById('referenceText').textContent = base + compoundNote;
 }
 function applyModeChrome(){
-  document.getElementById('modeTagline').textContent = TAGLINES[state.mode];
+  document.getElementById('modeTagline').textContent = state.mode === 'morph' ? morphTagline() : TAGLINES[state.mode];
   document.getElementById('formulaBadge').innerHTML = FORMULA_HTML[state.mode];
   document.getElementById('hudFormula').innerHTML = HUD_FORMULA_HTML[state.mode];
   updateReferenceText();
@@ -4393,12 +4433,49 @@ function replaceGroundGrid(theme, extent){
   groundGrid = buildGroundGrid(theme, extent);
   scene.add(groundGrid);
 }
-// Called at the end of rebuild(), after solidGroup is populated — resizes the grid only when the
-// built geometry's own footprint actually needs more (or less) room than it currently has, so a
-// plain slider tick doesn't rebuild grid geometry on every frame for no visual change.
+// Called at the end of rebuild(), after solidGroup is populated AND the camera has already been
+// repositioned for this frame (frameCameraDefault(), if pendingReframe, runs before this in
+// rebuild()) — resizes the grid only when it actually needs more (or less) room than it currently
+// has, so a plain slider tick doesn't rebuild grid geometry on every frame for no visual change.
+//
+// v1.51.4: the v1.51.1 fix (diameter*1.6 off the model's own bounding radius) still cut off
+// visibly for very tall, thin buildings like the Lotte Super Tower case study — verified with a
+// real headless-browser render + raycasting the camera's actual 4 viewport corners against the
+// ground plane: the BOTTOM corners landed at ~450m (within a 910-unit grid, fine), but the TOP
+// corners — shallow, near-horizontal rays, an unavoidable consequence of pulling the camera back
+// far enough to fit a 555m-tall, ~100m-wide tower in frame — landed at ~4640m, more than 4x
+// further than the model-radius formula ever sized for. That's not a model-size problem at all;
+// it's a camera-angle problem the old formula had no way to see. Fixed by actually measuring the
+// current view: raycast the 4 viewport corners through the camera against y=-0.05 (the grid's own
+// plane) and take the farthest valid downward hit, with the old diameter*1.6 kept only as a floor
+// for degenerate/near-horizontal views (e.g. Front) where an upper corner ray may not hit the
+// ground plane at all. Cap raised 4000->20000 to actually cover cases like this one instead of
+// silently re-clamping the fix away.
+function computeVisibleGroundExtent(){
+  // Caught by headless-browser testing, not visible from math alone: this runs synchronously right
+  // after positionCameraForFit() sets camera.position, before any render pass has called
+  // updateMatrixWorld() on it -- without this explicit call, raycaster.setFromCamera() unprojects
+  // through the camera's STALE matrixWorld (i.e. wherever it was pointed on the previous frame),
+  // silently under-sizing the grid for exactly one rebuild after any camera move.
+  camera.updateMatrixWorld();
+  const raycaster = new THREE.Raycaster();
+  const plane = new THREE.Plane(new THREE.Vector3(0,1,0), 0.05); // matches groundGrid's y=-0.05
+  let maxDist = 0;
+  for(const nx of [-1,1]) for(const ny of [-1,1]){
+    raycaster.setFromCamera({x:nx, y:ny}, camera);
+    const hit = new THREE.Vector3();
+    if(raycaster.ray.intersectPlane(plane, hit)){
+      const d = Math.hypot(hit.x, hit.z);
+      if(isFinite(d) && d > maxDist) maxDist = d;
+    }
+  }
+  return maxDist;
+}
 function syncGroundGridExtent(radius){
   const diameter = (radius || 0)*2;
-  const desired = Math.min(4000, Math.max(300, Math.ceil((diameter*1.6)/10)*10));
+  const radiusFloor = diameter*1.6;
+  const visible = computeVisibleGroundExtent() * 1.1; // 10% headroom beyond the farthest actual hit
+  const desired = Math.min(20000, Math.max(300, Math.ceil(Math.max(radiusFloor, visible)/10)*10));
   if(Math.abs(desired - groundGridExtent) > 1e-6){
     groundGridExtent = desired;
     replaceGroundGrid(uiPrefs.theme, groundGridExtent);
@@ -5614,9 +5691,9 @@ function downloadDynamoScript(){
 }
 document.getElementById('downloadDynamoScriptBtn').addEventListener('click', downloadDynamoScript);
 
-document.getElementById('viewTopBtn').addEventListener('click', ()=>{ frameCameraTop(); toast('Top view'); });
-document.getElementById('viewFrontBtn').addEventListener('click', ()=>{ frameCameraFront(); toast('Front / elevation view'); });
-document.getElementById('viewHomeBtn').addEventListener('click', ()=>{ frameCameraDefault(); toast('Home view'); });
+document.getElementById('viewTopBtn').addEventListener('click', ()=>{ frameCameraTop(); syncGroundGridExtent(lastModelRadius); toast('Top view'); });
+document.getElementById('viewFrontBtn').addEventListener('click', ()=>{ frameCameraFront(); syncGroundGridExtent(lastModelRadius); toast('Front / elevation view'); });
+document.getElementById('viewHomeBtn').addEventListener('click', ()=>{ frameCameraDefault(); syncGroundGridExtent(lastModelRadius); toast('Home view'); });
 
 // ---------- FFD handle dragging ----------
 // Standard screen-facing-plane drag: on pointerdown over a handle, build a plane through that
