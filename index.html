@@ -3910,6 +3910,7 @@ function rebuild(){
   // camera (e.g. dragging floors or footprint sliders, which deliberately don't disturb the view).
   const radiusBox = new THREE.Box3().setFromObject(solidGroup);
   if(!radiusBox.isEmpty()) lastModelRadius = radiusBox.getSize(new THREE.Vector3()).length() / 2;
+  syncGroundGridExtent(lastModelRadius);
 }
 
 // ---------- UI wiring ----------
@@ -4263,7 +4264,7 @@ const projectionGrid = document.getElementById('projectionGrid');
 // preferences, not part of "the model configuration" the way mode/preset/deformation params are.
 // A share link is supposed to hand someone else your BUILDING, not force your sidebar width or
 // Simple/Advanced choice onto their screen. Persisted separately under its own localStorage key.
-const uiPrefs = { uiMode: 'simple', sidebarWidthPx: 300, theme: 'light' };
+const uiPrefs = { uiMode: 'simple', sidebarWidthPx: 300, theme: 'dark' };
 try{
   const savedUI = JSON.parse(localStorage.getItem('spira-ui-prefs') || 'null');
   if(savedUI){
@@ -4317,15 +4318,44 @@ const THEME_COLORS = {
 // technique's tiling/repeat behavior being version- and mapping-dependent in three.js; THREE.GridHelper
 // is a single well-defined built-in primitive with no such ambiguity. Lives directly in `scene` (NOT
 // overlayGroup), so Simple/Advanced view and every Overlays toggle leave it alone — it's theme, not
-// data. 300 world-unit extent / 60 divisions = 5-unit cells, comfortably covers the largest footprint
-// the sliders allow (30m/100ft max, see syncFootprintSliderRange) with generous margin either side.
+// data.
+//
+// v1.51.0: the extent used to be a FIXED 300 world units (5-unit cells at 60 divisions), sized for
+// the old 30m/100ft footprint cap. Two things broke that assumption: footprint sliders widened to
+// 80m for Lotte Super Tower, AND Bend's own R=h/β sweeps arbitrarily wide as β_max shrinks toward
+// 0° regardless of footprint size — a user screenshot showed the grid plane visibly cut off short of
+// the actual solid's edges in exactly that case. Extent is now resynced every rebuild() from the
+// real built geometry's own bounding box (fitBoxDistance(), the same Box3 the camera-fit buttons
+// use), with 60% headroom beyond the circumscribed diameter so the grid always reads as "the floor
+// extends past the building," never "the building outgrew its floor." Clamped to [300, 4000] — 300
+// keeps small default models looking the same as before, 4000 is a sane ceiling against Bend's
+// β_max→0° case genuinely wanting an unbounded plane. Divisions track extent (5-unit cells) but cap
+// at 200 so a maxed-out extent doesn't quietly balloon the line count.
 let groundGrid = null;
-function buildGroundGrid(theme){
-  const g = new THREE.GridHelper(300, 60, THEME_COLORS[theme].gridLine, THEME_COLORS[theme].gridLine);
+let groundGridExtent = 300;
+function buildGroundGrid(theme, extent){
+  const divisions = Math.min(200, Math.max(20, Math.round(extent/5)));
+  const g = new THREE.GridHelper(extent, divisions, THEME_COLORS[theme].gridLine, THEME_COLORS[theme].gridLine);
   g.material.transparent = true;
   g.material.opacity = 0.35;
   g.position.y = -0.05; // nudged below y=0 so it never z-fights with Base plane B or floor lines
   return g;
+}
+function replaceGroundGrid(theme, extent){
+  if(groundGrid){ scene.remove(groundGrid); groundGrid.geometry.dispose(); groundGrid.material.dispose(); }
+  groundGrid = buildGroundGrid(theme, extent);
+  scene.add(groundGrid);
+}
+// Called at the end of rebuild(), after solidGroup is populated — resizes the grid only when the
+// built geometry's own footprint actually needs more (or less) room than it currently has, so a
+// plain slider tick doesn't rebuild grid geometry on every frame for no visual change.
+function syncGroundGridExtent(radius){
+  const diameter = (radius || 0)*2;
+  const desired = Math.min(4000, Math.max(300, Math.ceil((diameter*1.6)/10)*10));
+  if(Math.abs(desired - groundGridExtent) > 1e-6){
+    groundGridExtent = desired;
+    replaceGroundGrid(uiPrefs.theme, groundGridExtent);
+  }
 }
 function applyTheme(theme){
   uiPrefs.theme = theme;
@@ -4333,9 +4363,7 @@ function applyTheme(theme){
   else document.documentElement.removeAttribute('data-theme');
   document.getElementById('themeColorMeta').setAttribute('content', THEME_COLORS[theme].metaThemeColor);
   scene.background = new THREE.Color(THEME_COLORS[theme].sceneBg);
-  if(groundGrid){ scene.remove(groundGrid); groundGrid.geometry.dispose(); groundGrid.material.dispose(); }
-  groundGrid = buildGroundGrid(theme);
-  scene.add(groundGrid);
+  replaceGroundGrid(theme, groundGridExtent);
   [...themeGrid.children].forEach(b=>b.classList.toggle('active', b.dataset.themechoice === theme));
   persistUIPrefs();
 }
