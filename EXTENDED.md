@@ -443,6 +443,116 @@ offsets) through the real encode/decode functions, confirmed byte-for-byte deep-
 round trip, and confirmed the encoded output contains none of base64's non-URL-safe characters
 (`+`, `/`, `=`).
 
+## Compound operations
+
+Twist, Taper, and Shear can each be followed by a second operation, chosen from the Compound picker
+below the primary operation's own controls. `computeLayerPointCompound(mode, params, y, h, p)` wraps
+the existing, unmodified `computeLayerPoint()` — runs the primary transform, and if
+`state.compoundMode` is set, feeds the result's `[x, z]` back in at the **same** `y` through a second
+call to `computeLayerPoint()` for the secondary mode.
+
+This works because Twist, Taper, and Shear all return `[x, y, z]` with `y` passed straight through
+unchanged — rotation, scaling, and translation all happen entirely in the horizontal plane at each
+height, never touching the height coordinate itself. That means their output `x`/`z`, fed back in at
+the same `y`, is exactly the right input for a second transform. Verified before relying on this: a
+compound Twist-then-Taper computation was checked against a manual hand-chained calculation (exact
+match) and against boundary conditions (`y=0` and `y=h` land on the values the math predicts).
+
+**Bend can only ever be the last step in a chain.** Its own formula does not preserve this property —
+`worldY`/`worldZ` describe a point on a curved arc in world space, not "how far up the original
+straight axis" the point sits anymore, so there's no way to feed Bend's output into a second
+axis-based transform using this same `y`-preserving scheme. Free and Helix don't participate in
+compounding at all; neither fits the "preserve `y`, transform `x`/`z`" model this relies on. This
+constraint is enforced in three separate places, not assumed to hold from any one of them alone:
+the wrapper's own runtime check (`mode !== 'bend'` before compounding), the UI (the Compound picker
+hides itself and shows an explanatory note whenever the primary Operation is Bend), and the
+mode-switch handler (clears `compoundMode` when switching primary to Bend, FFD, or Helix, or to
+whatever mode is currently the compound choice).
+
+`computeLayerPoint(` was replaced with `computeLayerPointCompound(` at all 14 of its real call sites
+— mesh construction (side + caps, including the finite-difference normal sampling), the panel-warp
+overlay, the tolerance solver, the CSV panel-schedule and loft-profiles JSON exporters, and the axis
+(`A`/`A₁`) overlay. All of these already funneled through one or two spots in `rebuild()`
+(`buildDeformedGeometry`'s internal calls, and `lastBuild.evalPoint`), so switching that shared
+plumbing to the compound-aware wrapper made every downstream consumer compound-aware for free —
+none of them individually touched or even aware compounding exists.
+
+**Volume** falls back to the same numeric mesh integration (`computeMeshVolume`) FFD already used,
+whenever `state.compoundMode` is set — the closed-form formulas (Cavalieri-preserved volume for
+Twist/Shear/Bend, the quadratic formula for Taper) were each derived for a single operation, and
+chaining genuinely changes the math (Twist then Taper does scale volume, unlike Twist alone) without
+a new closed form being worth deriving just for this.
+
+`paramsForMode(mode)` factors out the `{V,W}`/`{DX,DY}`/`{betaMax}`/`{alphaMax}` params-building
+logic so the same mapping is used for both the primary operation (in `rebuild()`) and, when
+compounding, the secondary one — one mapping instead of two copies that could silently drift apart.
+The four compact secondary-parameter sliders in the Compound section write to the exact same `state`
+fields their primary counterparts use (`state.alphaMax`, `state.taperV`/`taperW`, `state.shearDXM`/
+`shearDYM`, `state.bendBetaMax`) — safe because the picker never allows the same mode to be both
+primary and secondary at once, so a compound slider and its primary counterpart are never live for
+the same field simultaneously. `syncSliderLabels()` keeps both directions in sync (primary → compound
+and compound → primary), since either one can now change a field the other's DOM element doesn't
+automatically know about.
+
+Play/Pause still only animates the primary operation's own parameter(s) — a disclosed scope decision,
+not a gap. Compare, localStorage persistence, and the shareable URL all pick up `compoundMode`
+automatically, since it's just one more field in the same `state` object those already serialize
+wholesale.
+
+## Animation
+
+One Play/Pause button (top of Deformation parameters, not duplicated per mode) ping-pongs the current
+Operation's own primary parameter(s) between a neutral starting value and whatever's currently dialed
+in, using an eased 0→1→0 cycle. It mutates `state` directly each animation frame and restores the
+exact pre-animation values on stop, rather than threading a parallel parameter-override path through
+`computeLayerPoint`/`buildDeformedGeometry` — those already read straight from `state` everywhere,
+and duplicating that plumbing just to avoid a few frames of temporary mutation would have been a much
+larger, riskier change to already-verified geometry code. It runs inside the existing `animate()`
+rAF loop (not a second one) and calls the very same `rebuild()` that FFD handle dragging already
+calls on every single `pointermove` — a full `rebuild()` every animation frame isn't a new class of
+per-frame cost this app takes on, just a new source of an already-accepted one.
+
+Free (FFD) has no single scalar parameter to animate — 8 independently-draggable control points
+instead — so its own branch scales every offset by the same 0→1 blend factor. Since Free's own
+default/Reset state has all 8 offsets at exactly zero, `startAnimation()` checks for at least one
+control point with real offset magnitude (>1cm) before starting; with nothing dragged, it shows a
+toast and declines rather than flipping to Pause and visibly doing nothing.
+
+Stops automatically on manual slider drag, Operation switch, case-study load, or Reset — each of
+those calls `stopAnimation()` from inside its own handler's body (not a second, separately-registered
+listener), since a second listener isn't guaranteed to run before the feature's own handler on the
+same click, and running after would restore stale pre-switch animation values over whatever the
+switch just set.
+
+## Comparison mode
+
+"Save snapshot" (Compare section) clones the current solid as a translucent ghost overlaid on the
+live model, rather than a literal second synced viewport — this app's single scene/camera/renderer/
+controls stack is referenced directly throughout `rebuild()` and every overlay function, and
+duplicating that whole stack for a real side-by-side view would have been a far larger, riskier
+restructuring than the feature was worth.
+
+Ghost geometry: temporarily swap `state` to the snapshot's captured values (a deep copy of every key
+in `state`, taken at the moment "Save snapshot" is clicked), call the real unmodified `rebuild()`,
+clone `solidGroup`'s resulting mesh(es) into a separate `ghostGroup`, swap `state` back to the live
+values, and call `rebuild()` again for the live geometry. This reuses the exact same, already-verified
+geometry path for the snapshot that the live model uses, at the cost of two `rebuild()` calls once
+per "Save snapshot" click — not per frame.
+
+`pendingReframe` is explicitly held `false` during the snapshot's own `rebuild()` call and restored
+to its original value before the live one — both calls share that one global flag, and letting the
+snapshot's `rebuild()` consume it would frame the camera to the snapshot's bounding box and silently
+drop the live model's own pending reframe. `ghostGroup` lives directly in `scene`, not `solidGroup`/
+`overlayGroup` — the same reasoning already applied to the graph-paper ground grid: it must survive
+`solidGroup` being cleared every `rebuild()`, and must not be swept into either camera-fit function's
+`Box3` (both scope to `solidGroup` only).
+
+The comparison delta readout is height-only, not volume or area — a deliberate scope decision, since
+what "volume" means differs across modes (Helix reports surface area, not volume; Free measures via
+numeric integration) and getting that normalization wrong across every mode combination felt like a
+worse outcome than a smaller but honestly-correct comparison. `totalHeightM()` is mode-agnostic and
+always correct, so it was the safe thing to build the comparison on.
+
 ## Verification approach
 
 Every operation's volume (or surface area, for Helix) claim was checked numerically before shipping,
@@ -458,6 +568,10 @@ before being handed over, and then confirmed working end-to-end in an actual Rev
 
 ## Known limitations
 
+- Bend can only be the last step in a compound chain — nothing can be compounded after it (see
+  Compound operations above for why). Free and Helix don't support compounding at all.
+- Play/Pause only animates the primary operation's parameter(s); a compound secondary operation's
+  own parameters stay at whatever they're currently dialed to during playback.
 - Helix's open Line generator can't be exported through the current loft pipeline (no solid
   interior); would need a ruled-surface approach instead. Pipe and Circle are both closed generators
   and export the same way every other closed mode does.

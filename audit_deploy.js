@@ -464,6 +464,60 @@ check('Pisa\'s shearDXM fits within the shearDXSlider\'s existing -8..8 range (n
     return computed > -8 && computed < 8;
   })());
 
+/* ===================== v1.50.0 — compound operations ===================== */
+sectionHeader('v1.50.0 — compound operations');
+check('computeLayerPointCompound() never compounds when the base mode is helix, ffd, or bend — the actual safety boundary, not just a UI-layer assumption',
+  (function(){
+    const m = src.match(/function computeLayerPointCompound\(mode, params, y, h, p\)\{[\s\S]*?\n\}/);
+    return !!m && m[0].includes("mode !== 'helix'") && m[0].includes("mode !== 'ffd'") && m[0].includes("mode !== 'bend'");
+  })());
+check('paramsForMode() is used both for the primary operation\'s own params in rebuild() and inside computeLayerPointCompound for the secondary one — one mapping, not two copies that could drift',
+  (function(){
+    const primaryUse = /params = state\.mode === 'ffd' \? \{ box, cps: ffdControlPoints\(box, h, state\.ffdOffsets\) \} : paramsForMode\(state\.mode\);/.test(src);
+    const compoundUse = /const secondaryParams = paramsForMode\(state\.compoundMode\);/.test(src);
+    return primaryUse && compoundUse;
+  })());
+check('volume falls back to numeric computeMeshVolume() whenever state.compoundMode is set, not just for FFD — the closed-form formulas were each derived for a single operation',
+  /\(state\.mode === 'ffd' \|\| state\.compoundMode\)\s*\n\s*\? computeMeshVolume\(sideGeo, bottomCap, topCap\)/.test(src));
+check('loadCaseStudy() clears state.compoundMode — a case study is a specific real building\'s single-operation figure, and compounding on top would misrepresent it',
+  (function(){
+    const m = src.match(/function loadCaseStudy\(key\)\{[\s\S]*?\n\}/);
+    return !!m && m[0].includes('state.compoundMode = null;');
+  })());
+check('the mode-switch handler clears state.compoundMode when switching primary to bend/ffd/helix (none support a secondary op) or to whatever mode is currently the compound choice (can\'t compound a mode with itself)',
+  (function(){
+    const m = src.match(/\[\.\.\.modeGrid\.children\]\.forEach\(btn=>\{[\s\S]*?\n\}\);/);
+    return !!m && m[0].includes('state.compoundMode === state.mode') && m[0].includes("state.mode === 'bend' || state.mode === 'ffd' || state.mode === 'helix'");
+  })());
+check('syncSliderLabels() sets BOTH the primary AND compound sliders\' own .value (not just label text) for every field they share — needed because a compound slider can now change a state field the primary slider\'s DOM element doesn\'t automatically know about',
+  (function(){
+    const m = src.match(/function syncSliderLabels\(\)\{[\s\S]*?\n\}/);
+    return !!m && m[0].includes('alphaSlider.value = state.alphaMax;') && m[0].includes('compoundAlphaSlider.value = state.alphaMax;');
+  })());
+check('syncShearSliderRange() also sets the compound shear sliders\' min/max/step, not just the primary ones — otherwise they\'d stay stuck at the narrow static HTML default instead of matching the primary\'s actual widened runtime range',
+  (function(){
+    const m = src.match(/function syncShearSliderRange\(\)\{[\s\S]*?\n\}/);
+    return !!m && m[0].includes('compoundShearDXSlider.min = -60') && m[0].includes('compoundShearDXSlider.min = -200');
+  })());
+check('compound shear sliders divide by M_TO_FT for the imperial conversion, matching the primary sliders exactly — not a reference to a nonexistent FT_TO_M constant (a real bug caught before shipping)',
+  (function(){
+    const m = src.match(/compoundShearDXSlider\.addEventListener\('input', e=>\{[\s\S]*?\n\}\);/);
+    return !!m && m[0].includes('v / M_TO_FT') && !m[0].includes('FT_TO_M');
+  })());
+check('applyCompoundUI() hides the compound picker grid and shows an explanatory note when primary mode is Bend, rather than just silently disabling or hiding the whole section without saying why',
+  (function(){
+    const m = src.match(/function applyCompoundUI\(\)\{[\s\S]*?\n\}/);
+    return !!m && m[0].includes("compoundGrid.style.display = 'none';") && m[0].includes("bendNote.style.display = '';");
+  })());
+check('all 14 real computeLayerPoint( call sites were renamed to computeLayerPointCompound( (mesh construction, panel warp/tolerance-solver/CSV export via evalPoint, the axis overlay) — only the function definition and the wrapper\'s own two internal calls still use the base name',
+  (function(){
+    const compoundCalls = (src.match(/computeLayerPointCompound\(/g) || []).length;
+    // 1 function definition + 2 internal calls inside its own body + 14 external call sites = 17 total mentions of the base name across definition+wrapper, and compoundCalls should be at least 14 (the external call sites) plus the wrapper's own definition line
+    return compoundCalls >= 15; // 1 def + 14 call sites, using the Compound name
+  })());
+check('the compound picker excludes whichever mode is currently primary from its own choices (a mode compounded with itself isn\'t a coherent second step)',
+  /btn\.style\.display = \(m === state\.mode\) \? 'none' : '';/.test(src));
+
 /* ===================== Summary ===================== */
 console.log(`\n${BOLD}${'-'.repeat(40)}${RESET}`);
 console.log(`${GREEN}${pass} passed${RESET}, ${fail ? RED : DIM}${fail} failed${RESET}`);

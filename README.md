@@ -67,6 +67,17 @@ bend does both — and exactly the three that don't scale (twist, shear, bend) p
 the one that does (taper) doesn't. Free sits outside that pattern entirely, on purpose. Helix sits
 outside it even further — it isn't deforming a solid at all, but sweeping a surface.
 
+**Compound.** Twist, Taper, and Shear can each be followed by a second operation — the Compound
+picker below the primary operation's own controls. Works because those three all return a point at
+the exact same height they were given (rotation/scaling/translation happen entirely in the
+horizontal plane at each level), so the result feeds cleanly into a second transform at that same
+height. Bend can only ever be the *last* step in a chain — once the axis itself curves, "how far up
+the original straight axis" a point sits no longer means anything a second transform could use, so
+nothing can follow it. Free and Helix don't participate in compounding at all. This is what makes a
+building like Shanghai Tower (which twists AND tapers) finally representable, after several other
+real buildings got rejected as case studies specifically for combining two operations SPIRA could
+previously only ever apply one of.
+
 Switch operations from the "Operation" control at the top of the sidebar; cross-section presets,
 floors/floor-height, units, resolution, and most overlays are shared across the first five — Helix
 swaps the cross-section and floors/floor-height controls for its own generator and turns/pitch
