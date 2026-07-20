@@ -4,6 +4,29 @@ Interactive explorer of architectural deformation operations — twisting, taper
 Joe.K · axisbim.io
 
 CHANGELOG
+v1.52.1 - 2026-07-19 - Fixed a black wedge appearing (with "surface area: NaN" in the HUD) partway
+         through Helix's Play animation, per a user screenshot. Root cause: state.helixTurns is
+         normally always an integer (the slider uses parseInt), which
+         `const uSegs = Math.min(state.helixTurns * state.segments, 800)` and buildHelicalGeometry's
+         two loops downstream (j<=uSegs building vertex rings, j<uSegs building quads between them)
+         both silently depended on to stay in sync — but Play/Pause animates helixTurns continuously
+         (see ANIMATABLE_PARAMS), so mid-animation it lands on fractional values (the screenshot
+         showed turns=1.8187846616430312, uSegs=87.3016637588655) where the two loops disagree by one
+         ring. That put the last row of quads' vertex indices one past the end of the position
+         buffer — reading undefined, which poisoned both the render (a collapsed/black face, matching
+         the screenshot) and computeMeshSurfaceArea's sum (NaN, from arithmetic on undefined).
+         Reproduced exactly in the Playwright harness at the screenshot's own turns value first
+         (confirmed maxIdx=177 against only 176 real vertices) before fixing, then fixed at the
+         source — Math.round() once where uSegs is computed, rather than chasing the mismatch through
+         every downstream consumer — and reverified the same way (maxIdx now 175, in range; surface
+         area a real number). The two OTHER places state.helixTurns drives a loop count (per-floor
+         overlay lines, computePanelWarp) turned out safe already — both evaluate geometry fresh each
+         iteration via layerPointFn rather than indexing into a shared pre-built vertex array, so a
+         fractional loop count just means the last partial iteration is naturally shorter, not
+         out-of-bounds. Verified end-to-end: a 44-point sweep across the full 0.05-to-6-turn range
+         (0 bad points), Circle and Pipe generators at a fractional turns value (0 NaN), and — closest
+         to the actual bug report — the real Play button running live for 30 sampled animation frames
+         with 0 NaN throughout. 148/148 audit passing (1 new check).
 v1.52.0 - 2026-07-19 - Teaching content, per user request with a full session available: glossary
          tooltips, exercises, and a guided tour. Checked first whether a separate "theory" panel was
          even needed — it wasn't: the Reference panel already explained each mode's math in depth,
@@ -2017,7 +2040,7 @@ v1.0.0 - 2026-07-17 - Initial build. Twist operation on four cross-section prese
 <script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
 <script src="https://cdn.jsdelivr.net/npm/three@0.128.0/examples/js/controls/OrbitControls.js"></script>
 <script>
-const APP_VERSION = '1.52.0';
+const APP_VERSION = '1.52.1';
 
 // ---------- toast ----------
 let toastTimer=null;
@@ -3435,7 +3458,16 @@ function rebuild(){
     };
     profile = HELIX_GENERATORS[state.helixGenerator](genParams);
     closed = HELIX_GENERATOR_CLOSED[state.helixGenerator];
-    const uSegs = Math.min(state.helixTurns * state.segments, 800); // sane cap on triangle count
+    // v1.52.1: rounded — buildHelicalGeometry's two loops (j<=uSegs building vertex rings, j<uSegs
+    // building quads between them) only produce a matching ring count when uSegs is a whole number.
+    // state.helixTurns is normally always an integer (the slider uses parseInt), but Play/Pause
+    // animates it continuously (see ANIMATABLE_PARAMS), so mid-animation this was landing on
+    // fractional values like 87.3 — which put the two loops one ring out of sync, making the last
+    // row of quads reference a vertex index one past the end of the position buffer. Reading that
+    // undefined position poisoned both the render (a collapsed/black face) and
+    // computeMeshSurfaceArea's sum (NaN, from arithmetic on undefined) — a user screenshot mid-Play
+    // caught both symptoms at once.
+    const uSegs = Math.max(1, Math.round(Math.min(state.helixTurns * state.segments, 800))); // sane cap on triangle count
     // 'pipe' needs both the sweep params (totalAngle/riseParRad) and the tube's own geometry
     // (rOffset/tubeR) together in one object for pipeFrenetPoint, and a custom evalPoint through
     // buildHelicalGeometry instead of the ordinary radial-sweep computeLayerPoint formula.

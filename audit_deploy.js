@@ -655,6 +655,11 @@ check('the tour auto-launches only when localStorage has no spira_tour_seen flag
   /function maybeAutoStartTour\(\)\{[\s\S]*?if\(!seen\) startTour\(\);/.test(src) &&
   /localStorage\.setItem\('spira_tour_seen', '1'\);/.test(src));
 
+/* ===================== v1.52.1 — fractional Helix uSegs fix ===================== */
+sectionHeader('v1.52.1 — fractional Helix uSegs fix');
+check('uSegs is rounded to a whole number (Math.round, floored at 1) — buildHelicalGeometry\'s ring-building loop (j<=uSegs) and quad-building loop (j<uSegs) only stay in sync, and in range, when uSegs is an integer; state.helixTurns is fractional mid-animation, which produced an out-of-bounds vertex index and NaN surface area before this fix',
+  /const uSegs = Math\.max\(1, Math\.round\(Math\.min\(state\.helixTurns \* state\.segments, 800\)\)\);/.test(src));
+
 /* ===================== Summary ===================== */
 console.log(`\n${BOLD}${'-'.repeat(40)}${RESET}`);
 console.log(`${GREEN}${pass} passed${RESET}, ${fail ? RED : DIM}${fail} failed${RESET}`);
