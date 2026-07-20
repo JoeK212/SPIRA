@@ -611,6 +611,50 @@ check('the on-axis A1 reference line uses a mode-aware origin point — [0,0,0,0
   /const axisOriginPoint = state\.mode === 'morph' \? \[0,0,0,0\] : \[0,0\];/.test(src) &&
   /computeLayerPointCompound\(state\.mode, params, y, h, axisOriginPoint\)/.test(src));
 
+/* ===================== v1.52.0 — teaching content ===================== */
+sectionHeader('v1.52.0 — teaching content');
+check('the termPopover/tourSpotlight/tourCallout container divs sit BEFORE the main inline <script> tag in the HTML — a real bug caught by browser testing: maybeAutoStartTour() runs synchronously at the end of that script and referenced them immediately, so placing them after (their first, wrong position) meant they didn\'t exist in the DOM yet and threw',
+  (function(){
+    const popIdx = src.indexOf('id="termPopover"');
+    const scriptIdx = src.indexOf('<script>\n');
+    return popIdx > -1 && scriptIdx > -1 && popIdx < scriptIdx;
+  })());
+check('.term spans have pointer-events:auto — a real bug caught by browser testing: #hud is deliberately pointer-events:none (so camera-orbit drags pass through it), which the Cavalieri term span inside #hudMatch silently inherited, making it unclickable until overridden',
+  /\.term\{[^}]*pointer-events:auto/.test(src));
+check('positionTourStep() scrolls the target into view BEFORE measuring its rect, not after — a real bug caught by browser testing: measuring first and scrolling (smoothly) after left the spotlight/callout positioned from stale pre-scroll coordinates for any step below the fold',
+  (function(){
+    const m = src.match(/function positionTourStep\(\)\{[\s\S]*?\n\}/);
+    if(!m) return false;
+    const scrollIdx = m[0].indexOf("target.scrollIntoView({ block:'nearest', behavior:'auto' });");
+    const rectIdx = m[0].indexOf('const r = target.getBoundingClientRect();');
+    return scrollIdx > -1 && rectIdx > -1 && scrollIdx < rectIdx;
+  })());
+check('the tour callout\'s vertical clamp measures its OWN actual rendered height via getBoundingClientRect() rather than a fixed guess — a real bug caught by browser testing: a hardcoded 140px guess was shorter than some steps\' actual ~190px rendered height, leaving the Next/Back buttons partially below the viewport and unclickable',
+  /const calloutW = 300, calloutH = callout\.getBoundingClientRect\(\)\.height;/.test(src));
+check('GLOSSARY has all 6 terms referenced from the Reference panel / HUD (cavalieri, developable, ruled, helicoid, lerp, closedform)',
+  ['cavalieri','developable','ruled','helicoid','lerp','closedform'].every(t => new RegExp(`${t}:\\s*\\{\\s*name:`).test(src)));
+check('the HUD\'s "volumes match" line uses innerHTML with a Cavalieri term span, not plain textContent (which would render the tag as literal text)',
+  /matchEl\.innerHTML = 'volumes match — <span class="term" data-term="cavalieri">Cavalieri holds<\/span>';/.test(src));
+check('updateReferenceText() sets referenceText via innerHTML (not textContent) so the embedded glossary term spans in REFERENCE_TEXT actually render as tags instead of literal text',
+  /document\.getElementById\('referenceText'\)\.innerHTML = base \+ compoundNote;/.test(src));
+check('EXERCISES has 5 entries, each with a check() function that reads live state/cached values rather than an independent recomputation',
+  (function(){
+    const m = src.match(/const EXERCISES = \[[\s\S]*?\n\];/);
+    return !!m && (m[0].match(/id:'/g)||[]).length === 5 && m[0].includes('lastVolDeformed') && m[0].includes('lastMaxWarpM');
+  })());
+check('lastMaxWarpM/lastVolDeformed/lastVolPrism are cached at their one real computation site inside rebuild() (not a second, independent calculation) so Exercises grade against exactly what the HUD displays',
+  /lastMaxWarpM = maxWarpM;/.test(src) && /lastVolDeformed = volDeformed;\s*\n\s*lastVolPrism = volPrism;/.test(src));
+check('TOUR_STEPS has 8 entries targeting real, stable existing element ids (not teaching-specific markup), so it can\'t drift out of sync with the actual UI',
+  (function(){
+    const m = src.match(/const TOUR_STEPS = \[[\s\S]*?\n\];/);
+    if(!m) return false;
+    const ids = ['#modeGrid','#crossSectionSection','#deformationParamsSection','#hud','#exercisesSection','#compoundSection','#viewControls','#exportSection'];
+    return (m[0].match(/sel:'/g)||[]).length === 8 && ids.every(id => m[0].includes(`sel:'${id}'`));
+  })());
+check('the tour auto-launches only when localStorage has no spira_tour_seen flag, and endTour() sets that flag, so it doesn\'t re-launch on every subsequent visit',
+  /function maybeAutoStartTour\(\)\{[\s\S]*?if\(!seen\) startTour\(\);/.test(src) &&
+  /localStorage\.setItem\('spira_tour_seen', '1'\);/.test(src));
+
 /* ===================== Summary ===================== */
 console.log(`\n${BOLD}${'-'.repeat(40)}${RESET}`);
 console.log(`${GREEN}${pass} passed${RESET}, ${fail ? RED : DIM}${fail} failed${RESET}`);

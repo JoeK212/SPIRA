@@ -4,6 +4,37 @@ Interactive explorer of architectural deformation operations — twisting, taper
 Joe.K · axisbim.io
 
 CHANGELOG
+v1.52.0 - 2026-07-19 - Teaching content, per user request with a full session available: glossary
+         tooltips, exercises, and a guided tour. Checked first whether a separate "theory" panel was
+         even needed — it wasn't: the Reference panel already explained each mode's math in depth,
+         and a v1.12.1 entry showed figure/page citations were deliberately removed after they turned
+         out not to check out, so the new work enriches that existing panel instead of duplicating it
+         (and doesn't reintroduce citations). GLOSSARY: 6 terms (Cavalieri's principle, developable
+         surface, ruled surface, helicoid, lerp, closed-form), click-to-show popover, woven into
+         Reference panel text via <span class="term"> and — the highest-value single placement in the
+         app — into the HUD's live "Cavalieri holds" line, which named the principle without ever
+         explaining it anywhere. EXERCISES: 5 self-checking challenges (Cavalieri, developable-surface
+         warp, taper volume, Compound+Morph, open-vs-closed Helix surfaces), each check() reading the
+         SAME cached values the HUD displays (new lastMaxWarpM/lastVolDeformed/lastVolPrism, set at
+         their one real computation site inside rebuild(), never re-derived) so an exercise can't
+         silently drift from what's on screen. TOUR: 8-step spotlight walkthrough targeting existing,
+         stable element ids (not new teaching-specific markup), auto-launches once via a localStorage
+         flag, re-launchable from a new header "Tour" button. Browser-testing this (not just a syntax
+         check) caught 3 real bugs before shipping: (1) the popover/tour container divs were placed
+         AFTER the main script tag, so maybeAutoStartTour() — which runs synchronously at that script's
+         end — referenced elements that didn't exist in the DOM yet and threw; moved them before it.
+         (2) the HUD's Cavalieri term span was unclickable because #hud is deliberately
+         pointer-events:none (so camera-orbit drags pass through it) and the span silently inherited
+         that; fixed with pointer-events:auto scoped to just .term. (3) positionTourStep() measured a
+         target's position, THEN scrolled it into view smoothly — for any step below the fold this
+         left the spotlight/callout positioned from stale pre-scroll coordinates, and separately the
+         vertical clamp used a hardcoded 140px height guess shorter than some steps' actual ~190px
+         rendered height, leaving the Next/Back buttons partially off-screen and unclickable; fixed by
+         scrolling (instantly) before measuring, and measuring the callout's own real rendered height
+         instead of guessing. Verified end-to-end: all 8 tour steps click through via real Playwright
+         clicks (not JS-triggered) start to finish; all 5 exercises tested through both a pass AND a
+         fail transition driven by real state changes; both HUD and Reference-panel glossary terms
+         open/close correctly. 148/148 audit passing (12 new checks).
 v1.51.5 - 2026-07-19 - Morph can now be the PRIMARY step in a Compound chain, followed by Twist/
          Taper/Shear/Bend — per user request while reviewing the feature backlog with limited time
          left in the session. Morph's compute branch already returned [x,y,z] with y preserved
@@ -1415,6 +1446,48 @@ v1.0.0 - 2026-07-17 - Initial build. Twist operation on four cross-section prese
     padding:3px 11px; font-size:0.78rem; line-height:1.4;
   }
 
+  /* v1.52.0: glossary tooltips — a dotted underline on any term the Reference panel or an Exercise
+     prompt uses, click to show its definition in a small popover near the term. Click-based (not
+     hover-only) so it works the same on touch devices, which a purely CSS :hover popover wouldn't. */
+  .term{ border-bottom:1px dotted var(--prussian); cursor:help; pointer-events:auto; }
+  [data-theme="dark"] .term{ border-bottom-color:var(--ochre); }
+  #termPopover{
+    position:fixed; z-index:80; max-width:280px; background:var(--paper); color:var(--ink);
+    border:1px solid var(--line); box-shadow:0 4px 14px rgba(0,0,0,0.25);
+    padding:10px 12px; font-size:0.76rem; line-height:1.5; display:none;
+  }
+  #termPopover .termName{ font-weight:600; color:var(--prussian); display:block; margin-bottom:4px; }
+
+  /* v1.52.0: Exercises — a self-checking challenge list, graded against the exact same cached
+     values (lastMaxWarpM/lastVolDeformed/lastVolPrism) the HUD itself displays, never a second,
+     independently-derived computation. */
+  #exercisesSection .presets{ grid-template-columns:1fr; gap:6px; }
+  #exercisesSection .preset-btn{ text-align:left; padding:8px 10px; }
+  #exercisePrompt{ font-size:0.78rem; line-height:1.55; color:var(--ink); margin:10px 0; }
+  #exerciseResult{ font-size:0.78rem; line-height:1.5; margin-top:8px; padding:8px 10px; display:none; }
+  #exerciseResult.pass{ display:block; background:rgba(60,140,60,0.15); color:#2f6e2f; }
+  [data-theme="dark"] #exerciseResult.pass{ color:#7fd88f; }
+  #exerciseResult.fail{ display:block; background:rgba(178,58,46,0.1); color:var(--brick); }
+
+  /* v1.52.0: guided tour — a spotlight cut-out (box-shadow trick: a transparent box with an enormous
+     shadow, so everything OUTSIDE it darkens while the box itself stays fully visible/interactive)
+     plus a callout box positioned next to it. Recomputed on window resize; closes the tour instead
+     of trying to re-track a moving target, since a resize mid-tour is rare and re-deriving every
+     step's position on the fly isn't worth the complexity it'd add. */
+  #tourSpotlight{
+    position:fixed; z-index:75; border-radius:4px; pointer-events:none;
+    box-shadow:0 0 0 9999px rgba(0,0,0,0.55); transition:all 0.25s ease; display:none;
+  }
+  #tourCallout{
+    position:fixed; z-index:76; max-width:300px; background:var(--paper); color:var(--ink);
+    border:1px solid var(--line); box-shadow:0 6px 20px rgba(0,0,0,0.35);
+    padding:14px 16px; font-size:0.8rem; line-height:1.55; display:none;
+  }
+  #tourCallout h4{ font-size:0.78rem; letter-spacing:0.02em; text-transform:uppercase; color:var(--prussian); margin:0 0 6px; }
+  #tourCallout .tourFoot{ display:flex; justify-content:space-between; align-items:center; margin-top:12px; }
+  #tourCallout .tourStepCount{ font-size:0.68rem; color:var(--muted); }
+  #tourCallout .tourBtns{ display:flex; gap:6px; }
+
   /* Help modal — how to use the app itself (controls, sliders, overlays, export). Deliberately
      separate from the sidebar's per-mode Reference panel, which cites the book's figures/pages the
      math comes from — this is app documentation, not theory. */
@@ -1471,6 +1544,7 @@ v1.0.0 - 2026-07-17 - Initial build. Twist operation on four cross-section prese
   <h1>SPIRA</h1>
   <div class="tag" id="modeTagline">twist deformation, live</div>
   <div class="axis-badge mono" id="formulaBadge">α(z) = (z/h)·α<sub>max</sub></div>
+  <button class="btn secondary" id="tourBtn" title="Guided tour of SPIRA">Tour</button>
   <button class="btn secondary" id="helpBtn" title="How to use SPIRA">?</button>
 </header>
 
@@ -1521,6 +1595,14 @@ v1.0.0 - 2026-07-17 - Initial build. Twist operation on four cross-section prese
       </div>
     </section>
 
+    <section class="group" id="exercisesSection">
+      <h3>Exercises</h3>
+      <div class="presets" id="exerciseGrid"></div>
+      <div id="exercisePrompt"></div>
+      <button class="btn secondary" id="exerciseCheckBtn" style="width:100%;">Check my design</button>
+      <div id="exerciseResult"></div>
+    </section>
+
     <section class="group">
       <h3>Operation</h3>
       <div class="presets" id="modeGrid" style="grid-template-columns:1fr 1fr 1fr;">
@@ -1563,7 +1645,7 @@ v1.0.0 - 2026-07-17 - Initial build. Twist operation on four cross-section prese
       </div>
     </section>
 
-    <section class="group">
+    <section class="group" id="deformationParamsSection">
       <h3>Deformation parameters</h3>
       <button class="btn secondary" id="playPauseBtn" style="width:100%; margin-bottom:12px;">▶ Play</button>
       <div id="twistParamsBlock">
@@ -1927,10 +2009,15 @@ v1.0.0 - 2026-07-17 - Initial build. Twist operation on four cross-section prese
 
 <div class="toast" id="toast"></div>
 
+
+<div id="termPopover"></div>
+<div id="tourSpotlight"></div>
+<div id="tourCallout"></div>
+
 <script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
 <script src="https://cdn.jsdelivr.net/npm/three@0.128.0/examples/js/controls/OrbitControls.js"></script>
 <script>
-const APP_VERSION = '1.51.5';
+const APP_VERSION = '1.52.0';
 
 // ---------- toast ----------
 let toastTimer=null;
@@ -3287,6 +3374,12 @@ let lastBuild = null; // {mode, profile, params, h, closed, n} — captured each
                        // loft-profiles JSON exporter can resample the exact same profile/params via
                        // computeLayerPoint, guaranteed in sync with what's on screen. See
                        // buildLoftProfilesJSON().
+// v1.52.0: cached straight from the SAME computation the HUD itself displays (not a second,
+// independent calculation) so Exercises can grade against exactly what's on screen. See the HUD
+// panel-warp block and the volume block inside rebuild() for where these get set.
+let lastMaxWarpM = 0;
+let lastVolDeformed = 0;
+let lastVolPrism = 0;
 let rulingLines = null;
 let axisHelper = null;
 let planeHelper = null;
@@ -3768,6 +3861,7 @@ function rebuild(){
     // — subPerEdge=1 is a no-op, returning the original profile/n unchanged.
     const { subProfile, subN } = subdivideProfileForPanels(profile, n, closed, state.panelSubdiv);
     const { panels, maxWarpM } = computePanelWarp(subProfile, layerPointFn, subN, closed, loopCount, stepM);
+    lastMaxWarpM = maxWarpM;
     document.getElementById('hudPanelWarp').textContent =
       toDisplaySmallLen(maxWarpM).toFixed(1) + ' ' + smallLenUnit();
     if(panels.length){
@@ -3926,6 +4020,8 @@ function rebuild(){
       ? computeMeshVolume(sideGeo, bottomCap, topCap)
       : computeDeformedVolume(state.mode, params, baseArea, h);
     const volPrism = baseArea * h;
+    lastVolDeformed = volDeformed;
+    lastVolPrism = volPrism;
 
     if(state.mode === 'taper'){
       document.getElementById('hudParam1Label').textContent = 'v (x-scale @ top)';
@@ -3976,7 +4072,7 @@ function rebuild(){
     const matchEl = document.getElementById('hudMatch');
     const ratio = volPrism > 0 ? volDeformed / volPrism : 1;
     if(Math.abs(ratio - 1) < 0.001){
-      matchEl.textContent = 'volumes match — Cavalieri holds';
+      matchEl.innerHTML = 'volumes match — <span class="term" data-term="cavalieri">Cavalieri holds</span>';
     } else {
       matchEl.textContent = `deformed volume is ${(ratio*100).toFixed(0)}% of the prism — this operation doesn't preserve volume`;
     }
@@ -4121,8 +4217,12 @@ const REFERENCE_TEXT = {
   twist: `Twist keeps a base plane B and a vertical axis A fixed, and rotates every horizontal slice at
     height z by α(z) = (z/h)·α_max — a linear ramp from 0° at the base to α_max at the top. Straight
     vertical edges become helices, since each one traces a rotating radius as it rises; a flat wall
-    through the axis becomes a helicoid, the same ruled surface behind twisted towers like the
-    Turning Torso. Try α_max = 90° or 180° to see a quarter or half turn, or push past 360° for
+    through the axis becomes a <span class="term" data-term="helicoid">helicoid</span>, the same
+    <span class="term" data-term="ruled">ruled surface</span> behind twisted towers like the Turning
+    Torso. Because rotating a slice never changes its area,
+    <span class="term" data-term="cavalieri">Cavalieri's principle</span> guarantees the twisted
+    volume exactly equals the straight prism's — the HUD's "volumes match" line is that guarantee
+    playing out. Try α_max = 90° or 180° to see a quarter or half turn, or push past 360° for
     multiple full turns.`,
   taper: `Taper also keeps base plane B and axis A fixed, but scales each slice instead of rotating
     it — independently, by v(z) in x and w(z) in y, both ramping linearly from 1 at the base to v, w
@@ -4133,8 +4233,9 @@ const REFERENCE_TEXT = {
   shear: `Shear is the only operation here where the axis itself moves: base plane B stays fixed, but
     each slice is simply translated within its own horizontal plane, linear from (0,0) at the base
     to (Δx,Δy) at the top — so the axis's image A₁ (shown in brick) leans away from the original A
-    (shown dashed). Because a translation never changes a slice's shape or area, shear preserves
-    volume exactly, the same as twist.`,
+    (shown dashed). Because a translation never changes a slice's shape or area,
+    <span class="term" data-term="cavalieri">Cavalieri's principle</span> applies again: shear
+    preserves volume exactly, the same as twist.`,
   bend: `Bend also moves the axis, but to a circular arc A₁ instead of a straight line — radius
     R = h/β, chosen so the arc is exactly as long as the original axis segment h. Each slice rotates
     and translates into the plane normal to that arc, with the profile's local x carried straight
@@ -4143,32 +4244,36 @@ const REFERENCE_TEXT = {
     bend, or push toward 360° to watch it curl back on itself. Turn on "Panel flatness (warp)" and
     compare it against Twist: Bend's floor-to-floor panels come out exactly flat regardless of angle
     or cross-section, since local x is never rotated — it's a true cylindrical bend of a flat sheet
-    (a developable surface), unlike Twist's helicoid, which warps every non-degenerate panel.`,
+    (a <span class="term" data-term="developable">developable surface</span>), unlike Twist's
+    helicoid, which warps every non-degenerate panel.`,
   ffd: `Free is the odd one out: unlike every other operation here, there's no axis and no fixed base
     plane at all — the whole solid sits inside a cuboid with 8 control points at its corners, and
     every point inside is a trilinear (1,1,1) Bézier blend of all 8. Drag any brick handle in the
     viewport to reshape it live. This looks like it should stay linear too, but a straight line not
     parallel to an edge becomes a cubic curve, and volume changes however the control points move —
-    there's no guarantee of preservation the way there is for twist, shear, and bend.`,
+    there's no <span class="term" data-term="closedform">closed-form</span> guarantee of
+    preservation the way there is for twist, shear, and bend.`,
   morph: `Morph is a different construction from the other operations: instead of moving a single
     fixed cross-section, it blends TWO different shapes together — the FROM shape at the base, the TO
-    shape at the top — point for point, linearly with height. Both shapes are resampled to the same
+    shape at the top — point for point, <span class="term" data-term="lerp">linearly</span> with
+    height. Both shapes are resampled to the same
     point count at evenly spaced angles around the vertical axis before blending, so corresponding
     points always sit at the same angle in both shapes (a square's corner and a circle's nearest
     point at that angle, for instance), which is what keeps the blend from twisting against itself.
     Because the cross-section's own shape changes, not just its size, position, or rotation, there's
-    no closed-form volume the way twist/shear/bend have — the volume shown is measured directly off
-    the built mesh, same as Free. Try Square → Ellipse for the classic "square base, round top"
+    no <span class="term" data-term="closedform">closed-form</span> volume the way twist/shear/bend
+    have — the volume shown is measured directly off the built mesh, same as Free. Try Square → Ellipse for the classic "square base, round top"
     silhouette (SOM's Lotte Super Tower case study), or push the two To-size sliders far apart from
     the base's own footprint sliders for a shape that narrows or widens as it morphs.`,
   helix: `Helix is a different construction from the other five, which all deform a solid — here a
     generator curve is swept by true helical motion: rotate by u about axis A while translating p·u
     along it (x=X(v)cosu, z=X(v)sinu, y=Y(v)+p·u). "Line" sweeps a straight segment orthogonal to A —
-    the common/right helicoid, the classic open spiral ramp or staircase — try a small inner radius
-    for a central newel void. "Circle" sweeps a circle lying flat in the meridian plane, producing a
-    winding tube or screw column. "Pipe" is the true constant-radius pipe — the circle instead rides
-    a Frenet frame along the helix centerline, always held orthogonal to the local tangent, so unlike
-    "Circle" its cross-section never distorts as the pitch steepens. Because a helicoid isn't a solid
+    the common/right <span class="term" data-term="helicoid">helicoid</span>, the classic open spiral
+    ramp or staircase — try a small inner radius for a central newel void. "Circle" sweeps a circle
+    lying flat in the meridian plane, producing a winding tube or screw column. "Pipe" is the true
+    constant-radius pipe — the circle instead rides a Frenet frame along the helix centerline, always
+    held orthogonal to the local tangent, so unlike "Circle" its cross-section never distorts as the
+    pitch steepens. Because a <span class="term" data-term="helicoid">helicoid</span> isn't a solid
     (the line generator in particular leaves a hole around the axis with zero thickness), there's no
     volume to report — the HUD shows surface area instead.`
 };
@@ -4203,7 +4308,7 @@ function updateReferenceText(){
   const compoundNote = state.compoundMode
     ? ` Compounded: this shape is the result above, THEN run through ${MODE_LABEL[state.compoundMode]}'s own operation as a second pass — the same math, just applied twice in sequence.`
     : '';
-  document.getElementById('referenceText').textContent = base + compoundNote;
+  document.getElementById('referenceText').innerHTML = base + compoundNote;
 }
 function applyModeChrome(){
   document.getElementById('modeTagline').textContent = state.mode === 'morph' ? morphTagline() : TAGLINES[state.mode];
@@ -5912,9 +6017,206 @@ function animate(){
   renderer.render(scene, camera);
 }
 
+// ==================== v1.52.0: teaching content ====================
+// Three additions, all reusing existing state/computation rather than duplicating it: glossary
+// tooltips woven into the Reference panel (already existed, see REFERENCE_TEXT above) and the HUD's
+// Cavalieri line; a self-checking Exercises list graded against the exact cached values
+// (lastMaxWarpM/lastVolDeformed/lastVolPrism, set at their one real computation site inside
+// rebuild() — see those assignments above) the HUD itself displays; and a guided first-visit tour.
+
+// ---------- glossary tooltips ----------
+const GLOSSARY = {
+  cavalieri: { name: "Cavalieri's principle", def: "If two solids have equal cross-sectional area at every height, they have equal volume. Twist and Shear both rotate/translate each slice without changing its area, so this guarantees their deformed volume exactly equals the straight prism's — no integration needed. It's what the HUD's \u201Cvolumes match\u201D readout is confirming." },
+  developable: { name: 'Developable surface', def: 'A surface that can be unrolled flat onto a plane with no stretching or tearing — real sheet material (metal panel, paper) can only exactly take this shape. Bend is the one operation in SPIRA that stays developable at every angle; every other curved mode warps.' },
+  ruled: { name: 'Ruled surface', def: "A surface built entirely from straight lines (rulings) connecting one curve to another. Every operation in SPIRA builds a ruled surface between consecutive floor plates — being ruled doesn't by itself mean flat/developable, though: Bend's rulings happen to stay planar, Twist's don't." },
+  helicoid: { name: 'Helicoid', def: "The surface swept by a straight line rotating at a constant rate while translating along its own axis — picture a spiral ramp with zero-width steps. Twist's side faces approximate one locally; Helix's \u201CLine\u201D generator sweeps a true one directly." },
+  lerp: { name: 'Lerp (linear interpolation)', def: "Blending smoothly between two values in direct proportion to a parameter — here, almost always the fraction of the building's height, z/h. Morph lerps between two whole cross-section shapes; Twist/Taper/Shear each lerp a single number (angle, scale, offset)." },
+  closedform: { name: 'Closed-form (vs. numeric) volume', def: "A closed-form formula computes the exact volume directly from the parameters. Twist/Taper/Shear/Bend each have one. Free-form, Helix, Morph, and any Compound combination don't — SPIRA falls back to summing the volume of many thin numerical slices instead, exact in the limit but not an algebraic formula." },
+};
+function showTermPopover(el){
+  const g = GLOSSARY[el.dataset.term];
+  if(!g) return;
+  const pop = document.getElementById('termPopover');
+  pop.innerHTML = `<span class="termName">${g.name}</span>${g.def}`;
+  pop.style.display = 'block';
+  const r = el.getBoundingClientRect();
+  const popW = 280; // matches CSS max-width
+  let left = Math.max(12, Math.min(r.left, window.innerWidth - popW - 12));
+  pop.style.left = left + 'px';
+  const approxHeight = pop.getBoundingClientRect().height || 90;
+  const below = r.bottom + 8;
+  pop.style.top = (below + approxHeight > window.innerHeight ? Math.max(12, r.top - approxHeight - 8) : below) + 'px';
+}
+document.addEventListener('click', (e)=>{
+  const term = e.target.closest('.term[data-term]');
+  const pop = document.getElementById('termPopover');
+  if(term){ showTermPopover(term); e.stopPropagation(); return; }
+  if(!e.target.closest('#termPopover')) pop.style.display = 'none';
+});
+document.addEventListener('keydown', (e)=>{ if(e.key === 'Escape') document.getElementById('termPopover').style.display = 'none'; });
+
+// ---------- exercises ----------
+// Each check() reads live `state` plus the cached lastMaxWarpM/lastVolDeformed/lastVolPrism —
+// never re-derives its own copy of the math, so an exercise can never silently drift out of sync
+// with what the HUD is actually showing the student.
+const EXERCISES = [
+  { id:'cavalieri', title:'1. Confirm Cavalieri', prompt:'Switch to <b>Twist</b>, dial α_max to anything other than 0°, and confirm the HUD\'s two volume numbers match exactly — that\'s <span class="term" data-term="cavalieri">Cavalieri\'s principle</span> in action.',
+    check: ()=>{
+      if(state.mode !== 'twist') return { pass:false, msg:'Switch the Operation to Twist first.' };
+      if(state.alphaMax === 0) return { pass:false, msg:'α_max is 0° right now — that\'s just a straight prism twisted by nothing. Dial it to something nonzero.' };
+      const ratio = lastVolPrism > 0 ? lastVolDeformed/lastVolPrism : 1;
+      return Math.abs(ratio-1) < 0.001
+        ? { pass:true, msg:`Confirmed — deformed and prism volume match at α_max=${state.alphaMax}°, exactly as Cavalieri predicts.` }
+        : { pass:false, msg:'Volumes don\'t match right now — is a Compound operation active? Clear it and try Twist alone.' };
+    } },
+  { id:'developable', title:'2. Find the flat panels', prompt:'Switch to <b>Bend</b>, any angle, and confirm the HUD\'s max panel warp reads at (or extremely close to) zero — the signature of a <span class="term" data-term="developable">developable surface</span>.',
+    check: ()=>{
+      if(state.mode !== 'bend') return { pass:false, msg:'Switch the Operation to Bend first.' };
+      return lastMaxWarpM < 0.0005
+        ? { pass:true, msg:`Confirmed — max panel warp is ${(lastMaxWarpM*1000).toFixed(2)}mm, effectively zero. Bend really is developable at any angle.` }
+        : { pass:false, msg:`Max panel warp is currently ${(lastMaxWarpM*1000).toFixed(1)}mm — not quite zero. Double-check no Compound operation is layered on top (a second step can reintroduce warp).` };
+    } },
+  { id:'taperdirection', title:'3. Taper and volume', prompt:'Switch to <b>Taper</b> and set the top width (v) below 1.0 (tapering inward) — confirm the HUD\'s deformed volume comes out LESS than the prism volume, unlike Twist/Shear.',
+    check: ()=>{
+      if(state.mode !== 'taper') return { pass:false, msg:'Switch the Operation to Taper first.' };
+      if(state.taperV >= 1) return { pass:false, msg:'v is at ' + state.taperV.toFixed(2) + ' — drag the v slider below 1.0 to taper inward.' };
+      return lastVolDeformed < lastVolPrism - 1
+        ? { pass:true, msg:`Confirmed — tapering to v=${state.taperV.toFixed(2)} shrinks the deformed volume below the prism's, unlike Twist or Shear.` }
+        : { pass:false, msg:'Volumes are too close together — try a smaller v for a more visible taper.' };
+    } },
+  { id:'compoundmorph', title:'4. Compound a topology change', prompt:'Load the <b>Lotte Super Tower</b> case study (Morph), then set its Compound to <b>Bend</b> — confirm both a shape-topology change AND a curved axis are active on the same building at once.',
+    check: ()=>{
+      if(state.mode !== 'morph') return { pass:false, msg:'Load the Lotte Super Tower case study (under Morph\'s Deformation parameters) first.' };
+      return state.compoundMode === 'bend'
+        ? { pass:true, msg:'Confirmed — Morph as the primary operation, Bend compounded on top. Two genuinely different kinds of deformation, stacked.' }
+        : { pass:false, msg:'Compound isn\'t set to Bend yet — open the Compound section and pick Bend.' };
+    } },
+  { id:'helixline', title:'5. Open vs. closed surfaces', prompt:'Switch to <b>Helix</b> with the "Line" generator — confirm the HUD explains it as an open <span class="term" data-term="helicoid">helicoid</span> with no volume to report, unlike every solid-building mode above it.',
+    check: ()=>{
+      if(state.mode !== 'helix') return { pass:false, msg:'Switch the Operation to Helix first.' };
+      return state.helixGenerator === 'line'
+        ? { pass:true, msg:'Confirmed — the "Line" generator sweeps an open helicoid (a spiral ramp), which is a surface with no interior volume, not a solid.' }
+        : { pass:false, msg:'Pick the "Line" generator specifically (Circle/Pipe both sweep a closed loop instead).' };
+    } },
+];
+let currentExercise = null;
+function renderExerciseGrid(){
+  const grid = document.getElementById('exerciseGrid');
+  grid.innerHTML = '';
+  EXERCISES.forEach(ex=>{
+    const btn = document.createElement('button');
+    btn.className = 'preset-btn' + (currentExercise === ex.id ? ' active' : '');
+    btn.textContent = ex.title;
+    btn.addEventListener('click', ()=> selectExercise(ex.id));
+    grid.appendChild(btn);
+  });
+}
+function selectExercise(id){
+  currentExercise = id;
+  const ex = EXERCISES.find(e=>e.id===id);
+  document.getElementById('exercisePrompt').innerHTML = ex.prompt;
+  document.getElementById('exerciseResult').style.display = 'none';
+  renderExerciseGrid();
+}
+document.getElementById('exerciseCheckBtn').addEventListener('click', ()=>{
+  if(!currentExercise){ toast('Pick an exercise above first'); return; }
+  const ex = EXERCISES.find(e=>e.id===currentExercise);
+  const result = ex.check();
+  const el = document.getElementById('exerciseResult');
+  el.className = result.pass ? 'pass' : 'fail';
+  el.textContent = (result.pass ? '✓ ' : '✗ ') + result.msg;
+  el.style.display = 'block';
+});
+renderExerciseGrid();
+selectExercise(EXERCISES[0].id);
+
+// ---------- guided tour ----------
+// Targets existing, already-stable element ids rather than any teaching-specific markup, so the
+// tour can't drift out of sync with the real UI the way a hand-maintained screenshot walkthrough
+// would. Closes (rather than re-tracking) on window resize — see the CSS comment for why.
+const TOUR_STEPS = [
+  { sel:'#modeGrid', title:'Operations', body:'Seven ways to deform a straight prism: Twist, Taper, Shear, Bend, Free-form, Helix, and Morph. Pick one to start — the whole app reconfigures around it.' },
+  { sel:'#crossSectionSection', title:'Cross-section', body:'The 2D shape (in plane B) that gets extruded and deformed. Square is the default, but try Star or Hexagon once you have a feel for an operation.' },
+  { sel:'#deformationParamsSection', title:'Deformation parameters', body:'The sliders that actually drive the math — and the Reference panel further down explains exactly what each one does, with clickable terms for anything unfamiliar.' },
+  { sel:'#hud', title:'Live readout', body:'Height, area, and volume update live as you drag any slider — including whether the deformed volume still matches the straight prism\'s, per Cavalieri\'s principle.' },
+  { sel:'#exercisesSection', title:'Exercises', body:'Self-checking challenges — build the described design, then hit "Check my design" to see if it matches, graded against the exact same numbers the HUD shows you.' },
+  { sel:'#compoundSection', title:'Compound', body:'Chain a second operation after the first — e.g. Twist a building, then Bend the whole result. Not every combination is possible; the panel explains which and why.' },
+  { sel:'#viewControls', title:'Camera', body:'Drag to orbit, scroll to zoom. Top/Front/Home jump to standard architectural views — Home also re-fits the camera to whatever\'s currently built.' },
+  { sel:'#exportSection', title:'Export', body:'Save a PNG, a shareable link, or real fabrication/BIM data — a panel schedule (.csv) or loft profiles for the bundled Dynamo/Revit script.' },
+];
+let tourStep = -1;
+function positionTourStep(){
+  if(tourStep < 0 || tourStep >= TOUR_STEPS.length) return;
+  const step = TOUR_STEPS[tourStep];
+  const target = document.querySelector(step.sel);
+  const spotlight = document.getElementById('tourSpotlight');
+  const callout = document.getElementById('tourCallout');
+  if(!target){ nextTourStep(); return; } // target not present in this view (e.g. collapsed) — skip
+  // Scroll BEFORE measuring, not after — an element below the fold needs to actually be in view
+  // before getBoundingClientRect() means anything; scrolling afterward (as this originally did)
+  // left the spotlight/callout positioned from stale, pre-scroll coordinates for any lower-sidebar
+  // step, putting both entirely off-screen. 'auto' (instant) rather than 'smooth' so the scroll is
+  // settled synchronously by the time the very next line measures it, not still animating.
+  target.scrollIntoView({ block:'nearest', behavior:'auto' });
+  const r = target.getBoundingClientRect();
+  const pad = 6;
+  spotlight.style.left = (r.left - pad) + 'px';
+  spotlight.style.top = (r.top - pad) + 'px';
+  spotlight.style.width = (r.width + pad*2) + 'px';
+  spotlight.style.height = (r.height + pad*2) + 'px';
+  spotlight.style.display = 'block';
+  callout.innerHTML = `<h4>${step.title}</h4><div>${step.body}</div>
+    <div class="tourFoot">
+      <span class="tourStepCount">${tourStep+1} / ${TOUR_STEPS.length}</span>
+      <div class="tourBtns">
+        <button class="btn secondary" id="tourSkipBtn" style="padding:4px 10px;">Skip</button>
+        ${tourStep>0 ? '<button class="btn secondary" id="tourBackBtn" style="padding:4px 10px;">Back</button>' : ''}
+        <button class="btn secondary" id="tourNextBtn" style="padding:4px 10px;">${tourStep===TOUR_STEPS.length-1?'Done':'Next'}</button>
+      </div>
+    </div>`;
+  callout.style.display = 'block';
+  // Prefer the callout to the right of the spotlight; flip to the left if that would run off-screen,
+  // and clamp vertically so it never falls off the top/bottom of a short viewport. Measures the
+  // callout's OWN actual rendered height (varies with each step's body text length) rather than a
+  // fixed guess — a guess that ran short here left the Next/Back buttons rendering partially below
+  // the viewport, off-screen and unclickable, for any step with longer-than-average body text.
+  const calloutW = 300, calloutH = callout.getBoundingClientRect().height;
+  let calLeft = r.right + 16;
+  if(calLeft + calloutW > window.innerWidth - 12) calLeft = Math.max(12, r.left - calloutW - 16);
+  let calTop = Math.max(12, Math.min(Math.max(12, r.top), window.innerHeight - calloutH - 12));
+  callout.style.left = calLeft + 'px';
+  callout.style.top = calTop + 'px';
+  document.getElementById('tourSkipBtn').addEventListener('click', endTour);
+  document.getElementById('tourNextBtn').addEventListener('click', nextTourStep);
+  const backBtn = document.getElementById('tourBackBtn');
+  if(backBtn) backBtn.addEventListener('click', prevTourStep);
+}
+function nextTourStep(){ tourStep++; if(tourStep >= TOUR_STEPS.length){ endTour(); return; } positionTourStep(); }
+function prevTourStep(){ tourStep = Math.max(0, tourStep-1); positionTourStep(); }
+function startTour(){
+  tourStep = 0;
+  document.getElementById('uiModeGrid').querySelector('[data-uimode="advanced"]').click(); // Compound/etc need Advanced visible to be tour-able
+  positionTourStep();
+}
+function endTour(){
+  tourStep = -1;
+  document.getElementById('tourSpotlight').style.display = 'none';
+  document.getElementById('tourCallout').style.display = 'none';
+  try{ localStorage.setItem('spira_tour_seen', '1'); }catch(e){}
+}
+window.addEventListener('resize', ()=>{ if(tourStep >= 0) endTour(); });
+document.getElementById('tourBtn').addEventListener('click', startTour);
+function maybeAutoStartTour(){
+  let seen = null;
+  try{ seen = localStorage.getItem('spira_tour_seen'); }catch(e){}
+  if(!seen) startTour();
+}
+
 resize();
 rebuild();
+maybeAutoStartTour();
 animate();
 </script>
+
 </body>
 </html>
