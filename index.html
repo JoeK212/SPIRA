@@ -4,6 +4,27 @@ Interactive explorer of architectural deformation operations — twisting, taper
 Joe.K · axisbim.io
 
 CHANGELOG
+v1.51.5 - 2026-07-19 - Morph can now be the PRIMARY step in a Compound chain, followed by Twist/
+         Taper/Shear/Bend — per user request while reviewing the feature backlog with limited time
+         left in the session. Morph's compute branch already returned [x,y,z] with y preserved
+         exactly like Twist/Taper/Shear do, which is the only contract computeLayerPointCompound()
+         needs from a primary step to feed a secondary one — so enabling it was three small,
+         surgical changes: canCompound now includes 'morph' (shows the picker), the mode-switch
+         handler no longer clears state.compoundMode when switching TO morph, and
+         computeLayerPointCompound()'s primary-exclusion list dropped 'morph' (kept helix/ffd/bend,
+         whose own output still can't feed a second step). Morph still can't be picked as the
+         SECONDARY step — its point representation is a 4-element [fromX,fromZ,toX,toZ], but the
+         compound wrapper hands a secondary step a plain [x,z] pair, a real domain mismatch, not
+         just an unwired UI option — so compoundGrid still only offers Twist/Taper/Shear/Bend,
+         unchanged. Verified with the same Playwright harness as v1.51.4: selected Bend as Morph's
+         secondary, sampled computeLayerPointCompound() at base/mid/top and confirmed both the
+         morph interpolation (x: 10->15->20) AND the bend curvature (z: 0->31.8->63.7) are present
+         in the same output, then checked a full built mesh (1568 vertices) for zero NaN/Infinity
+         values. That same check surfaced an unrelated pre-existing bug from v1.51.0: the on-axis
+         "A1" reference line fed every mode a 2-element [0,0] point, but Morph's branch needs 4
+         elements — silently NaN'd since Morph first shipped, just never exercised until this
+         change drew a fresh look at that call site. Fixed by giving Morph a mode-aware origin point
+         ([0,0,0,0], a from=(0,0)-to=(0,0) point that correctly stays on-axis with nothing to lerp).
 v1.51.4 - 2026-07-19 - Ground grid still cut off visibly in the background, per a user screenshot of
          the Lotte Super Tower case study — the v1.51.1 fix wasn't enough. Built a real headless-
          browser test (Playwright + a local three@0.128.0 copy, since the CDN URLs this project
@@ -1909,7 +1930,7 @@ v1.0.0 - 2026-07-17 - Initial build. Twist operation on four cross-section prese
 <script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
 <script src="https://cdn.jsdelivr.net/npm/three@0.128.0/examples/js/controls/OrbitControls.js"></script>
 <script>
-const APP_VERSION = '1.51.4';
+const APP_VERSION = '1.51.5';
 
 // ---------- toast ----------
 let toastTimer=null;
@@ -2576,7 +2597,7 @@ function paramsForMode(mode){
 // preserved-y output feeds into it correctly), just never followed by anything after.
 function computeLayerPointCompound(mode, params, y, h, p){
   const out = computeLayerPoint(mode, params, y, h, p);
-  if(state.compoundMode && mode !== 'helix' && mode !== 'ffd' && mode !== 'bend' && mode !== 'morph'){
+  if(state.compoundMode && mode !== 'helix' && mode !== 'ffd' && mode !== 'bend'){
     const secondaryParams = paramsForMode(state.compoundMode);
     return computeLayerPoint(state.compoundMode, secondaryParams, y, h, [out[0], out[2]]);
   }
@@ -3544,14 +3565,20 @@ function rebuild(){
       overlayGroup.add(aLine);
 
       // A1: exactly 2 points when nothing bends the axis (still provably straight even compounded —
-      // twist/taper/shear all move [0,0] linearly in y); sample the curve whenever bend is anywhere
-      // in the chain — computeLayerPointCompound at the on-axis point [0,0] gives A1 for any mode or
-      // compound combination generically, so this needs no special-casing beyond which count to use.
+      // twist/taper/shear/morph all move the on-axis point linearly in y, or not at all for morph
+      // since (0,0)->(0,0) has nothing to lerp); sample the curve whenever bend is anywhere in the
+      // chain — computeLayerPointCompound at the on-axis point gives A1 for any mode or compound
+      // combination generically, so this needs no special-casing beyond which count to use.
+      // v1.51.5: the on-axis point itself DOES need one piece of mode-awareness — Morph's compute
+      // branch expects a 4-element [fromX,fromZ,toX,toZ] point, not the 2-element [x,z] every other
+      // mode uses; feeding it [0,0] silently produced NaN (present since Morph shipped in v1.51.0,
+      // just never exercised until Morph could be a compound primary drew a fresh look at this call).
+      const axisOriginPoint = state.mode === 'morph' ? [0,0,0,0] : [0,0];
       const sampleCount = (state.mode === 'bend' || state.compoundMode === 'bend') ? 48 : 1;
       const a1Points = [];
       for(let k=0; k<=sampleCount; k++){
         const y = (k/sampleCount) * axisTop;
-        const [ax,ay,az] = computeLayerPointCompound(state.mode, params, y, h, [0,0]);
+        const [ax,ay,az] = computeLayerPointCompound(state.mode, params, y, h, axisOriginPoint);
         a1Points.push(new THREE.Vector3(ax, ay, az));
       }
       const a1Geo = new THREE.BufferGeometry().setFromPoints(a1Points);
@@ -4212,7 +4239,7 @@ function applyModeChrome(){
     if(animPlayer) stopAnimation();
     state.mode = btn.dataset.mode;
     if(state.compoundMode === state.mode) state.compoundMode = null; // can't compound a mode with itself
-    if(state.mode === 'bend' || state.mode === 'ffd' || state.mode === 'helix' || state.mode === 'morph') state.compoundMode = null; // bend can't be followed by anything; ffd/helix/morph don't support compounding at all
+    if(state.mode === 'bend' || state.mode === 'ffd' || state.mode === 'helix') state.compoundMode = null; // bend can't be followed by anything; ffd/helix don't support compounding at all (morph now does, v1.51.5 — it preserves y at each layer just like twist/taper/shear)
     applyModeChrome();
     syncSliderLabels();
     pendingReframe = true;
@@ -4246,7 +4273,7 @@ function applyCompoundUI(){
   const compoundSection = document.getElementById('compoundSection');
   const compoundGrid = document.getElementById('compoundGrid');
   const bendNote = document.getElementById('compoundBendUnavailableNote');
-  const canCompound = state.mode === 'twist' || state.mode === 'taper' || state.mode === 'shear';
+  const canCompound = state.mode === 'twist' || state.mode === 'taper' || state.mode === 'shear' || state.mode === 'morph';
   compoundSection.style.display = (canCompound || state.mode === 'bend') ? '' : 'none';
   if(state.mode === 'bend'){
     compoundGrid.style.display = 'none';

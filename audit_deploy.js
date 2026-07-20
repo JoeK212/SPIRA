@@ -527,8 +527,8 @@ check('computeLayerPoint\'s morph branch lerps [fromX,fromZ]→[toX,toZ] by (y/h
   })());
 check('paramsForMode() supplies morph\'s {blend} from state.morphBlend, alongside the other three axis-based modes\' params',
   /: mode === 'morph' \? \{ blend: state\.morphBlend \}/.test(src));
-check('computeLayerPointCompound() explicitly excludes morph from compounding (alongside helix/ffd/bend) — morph doesn\'t preserve the same-y x/z-only transform the compound wrapper relies on',
-  /mode !== 'helix' && mode !== 'ffd' && mode !== 'bend' && mode !== 'morph'/.test(src));
+check('computeLayerPointCompound() excludes helix/ffd/bend from compounding as primary (their own output can\'t feed a second step) — morph was excluded here too pre-v1.51.5; see that section for its removal',
+  /mode !== 'helix' && mode !== 'ffd' && mode !== 'bend'\)\{/.test(src) && !/mode !== 'bend' && mode !== 'morph'/.test(src));
 check('buildMorphProfile() exists and Morph\'s profile is built from it, not from scaledProfile() like the axis-based modes',
   /function buildMorphProfile\(\)\{/.test(src) && /state\.mode === 'morph' \? buildMorphProfile\(\)/.test(src));
 check('subdivideProfileForPanels interpolates profile points element-wise via .map (not hardcoded to indices 0/1) so Morph\'s 4-tuple [fromX,fromZ,toX,toZ] points survive panel subdivision intact',
@@ -536,8 +536,8 @@ check('subdivideProfileForPanels interpolates profile points element-wise via .m
     const m = src.match(/function subdivideProfileForPanels\([\s\S]*?\n\}/);
     return !!m && m[0].includes('subProfile.push(p0.map((v,k) => v + (p1[k]-v)*t));');
   })());
-check('the Compound section stays hidden for Morph (like FFD/Helix) — the mode-switch handler clears state.compoundMode when switching primary to morph',
-  /state\.mode === 'bend' \|\| state\.mode === 'ffd' \|\| state\.mode === 'helix' \|\| state\.mode === 'morph'\) state\.compoundMode = null/.test(src));
+check('the mode-switch handler clears state.compoundMode for FFD/Helix (still can\'t compound) but NOT for Morph as of v1.51.5 — see that section for why Morph dropped out of this list',
+  /state\.mode === 'bend' \|\| state\.mode === 'ffd' \|\| state\.mode === 'helix'\) state\.compoundMode = null/.test(src) && !/state\.mode === 'helix' \|\| state\.mode === 'morph'\) state\.compoundMode = null/.test(src));
 check('footprint sliders were widened to accommodate Lotte Super Tower\'s 70m square base (30m/100ft cap would have clipped it)',
   /morphParamsBlock/.test(src) && /80/.test(src.match(/footprintWidthSlider\.max\s*=[\s\S]{0,40}/)?.[0] || src));
 
@@ -595,6 +595,21 @@ check('the Top/Front/Home view buttons each call syncGroundGridExtent(lastModelR
   /frameCameraDefault\(\); syncGroundGridExtent\(lastModelRadius\); toast\('Home view'\)/.test(src));
 check('the 20000 extent cap is a real raise from v1.51.1\'s 4000, not left in place alongside the new frustum-based formula (a stale low cap would silently re-clip the fix on extreme-aspect buildings like Lotte Super Tower)',
   !/Math\.min\(4000, Math\.max\(300,/.test(src));
+
+/* ===================== v1.51.5 — Compound + Morph ===================== */
+sectionHeader('v1.51.5 — Compound + Morph');
+check('canCompound (the primary-mode gate for showing an enabled Compound picker) now includes morph, alongside twist/taper/shear',
+  /const canCompound = state\.mode === 'twist' \|\| state\.mode === 'taper' \|\| state\.mode === 'shear' \|\| state\.mode === 'morph';/.test(src));
+check('computeLayerPointCompound() no longer excludes morph as primary — only helix/ffd/bend remain excluded (their own output can\'t feed a second step)',
+  /if\(state\.compoundMode && mode !== 'helix' && mode !== 'ffd' && mode !== 'bend'\)\{/.test(src));
+check('secondary compound options are still only Twist/Taper/Shear/Bend (never Morph) — Morph\'s 4-element [fromX,fromZ,toX,toZ] point shape only fits as primary, since the compound wrapper hands the secondary a plain [x,z] pair',
+  (function(){
+    const m = src.match(/<div class="presets" id="compoundGrid"[\s\S]*?<\/div>/);
+    return !!m && !/data-compound="morph"/.test(m[0]) && /data-compound="twist"/.test(m[0]) && /data-compound="bend"/.test(m[0]);
+  })());
+check('the on-axis A1 reference line uses a mode-aware origin point — [0,0,0,0] for Morph, [0,0] for every other mode — instead of always [0,0]',
+  /const axisOriginPoint = state\.mode === 'morph' \? \[0,0,0,0\] : \[0,0\];/.test(src) &&
+  /computeLayerPointCompound\(state\.mode, params, y, h, axisOriginPoint\)/.test(src));
 
 /* ===================== Summary ===================== */
 console.log(`\n${BOLD}${'-'.repeat(40)}${RESET}`);
