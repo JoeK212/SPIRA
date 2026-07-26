@@ -5769,7 +5769,7 @@ def build_loft_solid(data):
         solid = GeometryCreationUtilities.CreateLoftGeometry(loops, solid_options)
     except Exception as ex:
         raise ValueError(
-            "Revit's loft builder rejected these profiles: {}\n\n"
+            "Revit's loft builder rejected these profiles: {}\\n\\n"
             "This can happen with a large twist/bend angle and too few loft "
             "profiles -- try raising SPIRA's 'loft profiles' slider before "
             "re-exporting, or reducing the deformation angle.".format(ex)
