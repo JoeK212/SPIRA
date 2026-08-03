@@ -2,6 +2,1208 @@
 SPIRA
 Interactive explorer of architectural deformation operations — twisting, tapering, shearing, bending, freeform (FFD), and helical sweeps — with a live solid and volume/area readout
 Joe.K · axisbim.io
+
+CHANGELOG
+v1.53.1 - 2026-07-30 - Two fixes. (1) Fixed the Dynamo import script's download coming out corrupted:
+         one line inside the DYNAMO_IMPORT_SCRIPT_PY constant used a single-backslash \n\n, but since
+         that constant is a JS template literal, JS's own escape processing quietly turned it into a
+         real line break before the file was ever downloaded — breaking a Python string literal
+         across physical lines (a "EOL while scanning string" error in Dynamo). Fixed by doubling the
+         backslashes so JS's escaping leaves literal \n\n behind in the actual generated .py file,
+         confirmed by reconstructing the exact Blob content the download button produces and checking
+         it parses as valid Python. (2) Replaced the old 760px "shrink everything down" mobile
+         attempt with a proper block screen (matching the pattern already used in Modulor Mondrian),
+         per user request — SPIRA's sidebar-plus-3D-viewport interaction (dozens of sliders, precise
+         orbit/zoom gestures) doesn't hold up on a phone no matter how much CSS shrinking the old
+         layout did. 760px is the same threshold the old breakpoint already used — every common
+         tablet (iPad Mini at 768px+) already falls above it, so this range was always effectively
+         phone-only; nothing tablet-sized loses functionality. The render loop now also skips its
+         per-frame work while blocked (still calls requestAnimationFrame so it resumes instantly on
+         resize, just skips the actual camera/render work), so a phone isn't left running a full
+         WebGL loop against a screen nobody can see. Verified in a live browser: blocks at
+         390×844/375×812 (iPhone-sized), shows the full app normally at 1400×900, reacts live to an
+         in-page resize crossing the breakpoint either direction with no reload needed, camera.near
+         confirmed frozen while blocked and confirmed still updating normally once above the
+         breakpoint, and a full 7-mode NaN sweep confirmed nothing else broke.
+v1.53.0 - 2026-07-25 - App now always opens on the guided Tour, every load, per user request. Previously
+         maybeAutoStartTour() gated the auto-launch behind a `spira_tour_seen` localStorage flag, so the
+         Tour only ever ran once per browser; removed that function and the flag entirely and call
+         startTour() directly at boot instead. endTour() no longer writes to localStorage (nothing reads
+         it anymore). The Tour remains re-launchable anytime from the header "Tour" button.
+v1.52.1 - 2026-07-19 - Fixed a black wedge appearing (with "surface area: NaN" in the HUD) partway
+         through Helix's Play animation, per a user screenshot. Root cause: state.helixTurns is
+         normally always an integer (the slider uses parseInt), which
+         `const uSegs = Math.min(state.helixTurns * state.segments, 800)` and buildHelicalGeometry's
+         two loops downstream (j<=uSegs building vertex rings, j<uSegs building quads between them)
+         both silently depended on to stay in sync — but Play/Pause animates helixTurns continuously
+         (see ANIMATABLE_PARAMS), so mid-animation it lands on fractional values (the screenshot
+         showed turns=1.8187846616430312, uSegs=87.3016637588655) where the two loops disagree by one
+         ring. That put the last row of quads' vertex indices one past the end of the position
+         buffer — reading undefined, which poisoned both the render (a collapsed/black face, matching
+         the screenshot) and computeMeshSurfaceArea's sum (NaN, from arithmetic on undefined).
+         Reproduced exactly in the Playwright harness at the screenshot's own turns value first
+         (confirmed maxIdx=177 against only 176 real vertices) before fixing, then fixed at the
+         source — Math.round() once where uSegs is computed, rather than chasing the mismatch through
+         every downstream consumer — and reverified the same way (maxIdx now 175, in range; surface
+         area a real number). The two OTHER places state.helixTurns drives a loop count (per-floor
+         overlay lines, computePanelWarp) turned out safe already — both evaluate geometry fresh each
+         iteration via layerPointFn rather than indexing into a shared pre-built vertex array, so a
+         fractional loop count just means the last partial iteration is naturally shorter, not
+         out-of-bounds. Verified end-to-end: a 44-point sweep across the full 0.05-to-6-turn range
+         (0 bad points), Circle and Pipe generators at a fractional turns value (0 NaN), and — closest
+         to the actual bug report — the real Play button running live for 30 sampled animation frames
+         with 0 NaN throughout. 148/148 audit passing (1 new check).
+v1.52.0 - 2026-07-19 - Teaching content, per user request with a full session available: glossary
+         tooltips, exercises, and a guided tour. Checked first whether a separate "theory" panel was
+         even needed — it wasn't: the Reference panel already explained each mode's math in depth,
+         and a v1.12.1 entry showed figure/page citations were deliberately removed after they turned
+         out not to check out, so the new work enriches that existing panel instead of duplicating it
+         (and doesn't reintroduce citations). GLOSSARY: 6 terms (Cavalieri's principle, developable
+         surface, ruled surface, helicoid, lerp, closed-form), click-to-show popover, woven into
+         Reference panel text via <span class="term"> and — the highest-value single placement in the
+         app — into the HUD's live "Cavalieri holds" line, which named the principle without ever
+         explaining it anywhere. EXERCISES: 5 self-checking challenges (Cavalieri, developable-surface
+         warp, taper volume, Compound+Morph, open-vs-closed Helix surfaces), each check() reading the
+         SAME cached values the HUD displays (new lastMaxWarpM/lastVolDeformed/lastVolPrism, set at
+         their one real computation site inside rebuild(), never re-derived) so an exercise can't
+         silently drift from what's on screen. TOUR: 8-step spotlight walkthrough targeting existing,
+         stable element ids (not new teaching-specific markup), auto-launches once via a localStorage
+         flag, re-launchable from a new header "Tour" button. Browser-testing this (not just a syntax
+         check) caught 3 real bugs before shipping: (1) the popover/tour container divs were placed
+         AFTER the main script tag, so maybeAutoStartTour() — which runs synchronously at that script's
+         end — referenced elements that didn't exist in the DOM yet and threw; moved them before it.
+         (2) the HUD's Cavalieri term span was unclickable because #hud is deliberately
+         pointer-events:none (so camera-orbit drags pass through it) and the span silently inherited
+         that; fixed with pointer-events:auto scoped to just .term. (3) positionTourStep() measured a
+         target's position, THEN scrolled it into view smoothly — for any step below the fold this
+         left the spotlight/callout positioned from stale pre-scroll coordinates, and separately the
+         vertical clamp used a hardcoded 140px height guess shorter than some steps' actual ~190px
+         rendered height, leaving the Next/Back buttons partially off-screen and unclickable; fixed by
+         scrolling (instantly) before measuring, and measuring the callout's own real rendered height
+         instead of guessing. Verified end-to-end: all 8 tour steps click through via real Playwright
+         clicks (not JS-triggered) start to finish; all 5 exercises tested through both a pass AND a
+         fail transition driven by real state changes; both HUD and Reference-panel glossary terms
+         open/close correctly. 148/148 audit passing (12 new checks).
+v1.51.5 - 2026-07-19 - Morph can now be the PRIMARY step in a Compound chain, followed by Twist/
+         Taper/Shear/Bend — per user request while reviewing the feature backlog with limited time
+         left in the session. Morph's compute branch already returned [x,y,z] with y preserved
+         exactly like Twist/Taper/Shear do, which is the only contract computeLayerPointCompound()
+         needs from a primary step to feed a secondary one — so enabling it was three small,
+         surgical changes: canCompound now includes 'morph' (shows the picker), the mode-switch
+         handler no longer clears state.compoundMode when switching TO morph, and
+         computeLayerPointCompound()'s primary-exclusion list dropped 'morph' (kept helix/ffd/bend,
+         whose own output still can't feed a second step). Morph still can't be picked as the
+         SECONDARY step — its point representation is a 4-element [fromX,fromZ,toX,toZ], but the
+         compound wrapper hands a secondary step a plain [x,z] pair, a real domain mismatch, not
+         just an unwired UI option — so compoundGrid still only offers Twist/Taper/Shear/Bend,
+         unchanged. Verified with the same Playwright harness as v1.51.4: selected Bend as Morph's
+         secondary, sampled computeLayerPointCompound() at base/mid/top and confirmed both the
+         morph interpolation (x: 10->15->20) AND the bend curvature (z: 0->31.8->63.7) are present
+         in the same output, then checked a full built mesh (1568 vertices) for zero NaN/Infinity
+         values. That same check surfaced an unrelated pre-existing bug from v1.51.0: the on-axis
+         "A1" reference line fed every mode a 2-element [0,0] point, but Morph's branch needs 4
+         elements — silently NaN'd since Morph first shipped, just never exercised until this
+         change drew a fresh look at that call site. Fixed by giving Morph a mode-aware origin point
+         ([0,0,0,0], a from=(0,0)-to=(0,0) point that correctly stays on-axis with nothing to lerp).
+v1.51.4 - 2026-07-19 - Ground grid still cut off visibly in the background, per a user screenshot of
+         the Lotte Super Tower case study — the v1.51.1 fix wasn't enough. Built a real headless-
+         browser test (Playwright + a local three@0.128.0 copy, since the CDN URLs this project
+         loads from are blocked by this sandbox's network allowlist) and raycast the camera's actual
+         4 viewport corners against the ground plane to measure what's really visible: the two BOTTOM
+         corners landed ~450m out (well inside the old 910-unit grid), but the two TOP corners —
+         shallow, near-horizontal rays, unavoidable once the camera pulls back far enough to fit a
+         555m-tall, ~100m-wide tower in frame — landed ~4640m out, over 4x farther than the v1.51.1
+         model-radius formula ever accounted for. That was never a model-SIZE problem the old formula
+         could see; it's a camera-ANGLE problem. Fixed with computeVisibleGroundExtent(): raycasts
+         the 4 viewport corners against y=-0.05 (the grid's own plane) each rebuild and takes the
+         farthest valid hit (with the old diameter*1.6 kept as a floor for near-horizontal views like
+         Front, where an upper corner may not hit the ground at all). Cap raised 4000->20000 so the
+         real fix isn't silently re-clipped. Testing this for real (not just math) caught two further
+         bugs math alone wouldn't have surfaced: (1) the Top/Front/Home view buttons reposition the
+         camera directly, outside of rebuild(), so the grid was going stale in those views without an
+         explicit re-sync — added one; (2) computeVisibleGroundExtent() runs synchronously right
+         after the camera moves, before any render pass has called updateMatrixWorld() on it, so the
+         very first raycast after any camera move was reading a STALE transform and silently under-
+         sizing the grid for exactly one rebuild — fixed with an explicit camera.updateMatrixWorld()
+         at the top of the function. Verified end-to-end: covered (grid extent >= farthest visible
+         ground hit) across Home/Top/Front for Lotte Super Tower, Bend's small-angle case (the
+         original v1.51.1 trigger), Guggenheim's Helix case study, and the plain default Twist shape.
+v1.51.3 - 2026-07-19 - Morph's header tagline is now dynamic ("Square → Ellipse, live") instead of
+         the generic static "shape morph, live" it shipped with in v1.51.0 — per user request while
+         picking a title for a screenshot of the feature. morphTagline() reads PRESET_LABELS[state.
+         preset] and PRESET_LABELS[state.morphToPreset] directly, so it always names whichever pair
+         is actually loaded. Refreshed via applyModeChrome() from three places: the existing
+         mode-switch/case-study-load call sites (unchanged), plus two new calls added to the From-
+         shape and To-shape preset-button click handlers so the tagline updates live as either picker
+         changes, not just on mode switch. Also checked the "volumes match — Cavalieri holds" text's
+         color per a user question about it reading as a warning (red) rather than a confirmation —
+         it uses --brick, which is this app's actual primary accent/CTA color used throughout (active
+         preset buttons, primary buttons), not a semantic error color, so left unchanged.
+v1.51.2 - 2026-07-19 - Fixed Play/Pause doing nothing on Morph. Root cause: Morph had no animatable
+         parameter at all — computeLayerPoint's morph branch always fully blended by y/h with
+         nothing to ping-pong, so Play just showed a "can't animate" toast. Added state.morphBlend
+         (default 1.0, not exposed as its own slider) — computeLayerPoint('morph') now scales its
+         lerp by params.blend, and Play animates morphBlend 0→1→0 (0 = pure extrusion of the FROM
+         shape, matching the "neutral start" convention every other mode's animation already uses;
+         animating morphToWidthM/DepthM directly wasn't viable since matched sizes still don't equal
+         "no change" whenever fromPreset≠toPreset). Removed the special-case toast; Morph now flows
+         through the same ANIMATABLE_PARAMS table as every other mode.
+v1.51.1 - 2026-07-19 - Fixed ground grid visibly cut off short of the built solid's edges in Bend
+         mode at small bend angles (β_max=6°, R=h/β=877ft — a small angle sweeps a very wide arc
+         regardless of footprint size). Root cause: the grid was a fixed 300-unit extent, a leftover
+         assumption from the pre-Lotte 30m footprint cap, never revisited when the footprint sliders
+         were widened to 80m. Grid extent now resyncs every rebuild() from the actual built
+         geometry's own bounding radius (reusing the Box3 already computed for lastModelRadius, no
+         duplicate work) — 60% headroom beyond the circumscribed diameter, clamped [300, 4000], only
+         rebuilds grid geometry when the needed extent actually changes. Also switched the default
+         theme from Light to Blueprint (dark) per explicit request — a user's saved localStorage
+         preference still overrides this on repeat visits.
+v1.51.0 - 2026-07-19 - Morph mode shipped, per user request after Lotte Super Tower (SOM, unbuilt,
+         555m/112fl, 70m square base tapering to a 40m circular top) was rejected from every existing
+         mode including Compound: it's a cross-section TOPOLOGY change (square to circle), not a
+         scale/twist/shear of one consistent profile shape. Each profile point becomes a 4-tuple
+         [fromX,fromZ,toX,toZ] instead of [x,z], letting it slot into the existing
+         buildDeformedGeometry/cap/panel pipeline almost unmodified — computeLayerPoint's morph
+         branch lerps p[0..1]→p[2..3] by y/h. FROM/TO presets independently resampled to a shared
+         N=32 points via ray-casting from the origin at evenly-spaced angles (not arc-length) so
+         corresponding indices share the same angle in both shapes and don't twist against each
+         other mid-blend — verified numerically before shipping. Generalized
+         subdivideProfileForPanels to interpolate ALL point elements (was hardcoded to 2 for [x,z]),
+         so Morph's 4-tuples survive panel subdivision and the loft-profiles JSON export produces one
+         N-point level per height for free. No closed-form volume (numeric mesh fallback, like FFD).
+         Doesn't compound with other modes (like FFD/Helix). Footprint sliders widened 30m/100ft →
+         80m/260ft for Lotte's 70m base (same fix pattern as Guggenheim's radius sliders). Case
+         study: Lotte Super Tower, square→ellipse, linear blend only (documented simplification,
+         same treatment as Shard/Pisa).
+v1.50.0 - 2026-07-19 - Compound operations — apply a second deformation after the first (e.g. Twist
+         then Taper), the single biggest feature request this project has had. Motivation: every
+         rejected case study so far (Shanghai Tower, Absolute World, and in spirit Capital Gate) was
+         rejected for the SAME reason — the real building compounds two operations and SPIRA could
+         only ever do one. This closes that gap; Shanghai Tower (twist+taper) is now representable.
+         Mechanism: computeLayerPointCompound() wraps the existing, unmodified computeLayerPoint() —
+         runs the primary transform, and if state.compoundMode is set, feeds the result's [x,z] back
+         in at the SAME y through a second transform. This works because twist/taper/shear all return
+         [x, y, z] with y passed straight through unchanged (rotation/scaling/translation happen
+         entirely in the x/z plane at each height) — verified this against a manual hand-chained
+         computation (exact match) and against boundary conditions at y=0/y=h before relying on it.
+         Bend can only ever be the LAST step in a chain: its own output describes a point on a curved
+         world-space arc, not "how far up the original axis" anymore, so nothing can be chained after
+         it — enforced in three places (the wrapper's own safety check, the Compound picker hiding
+         itself with an explanatory note whenever primary=Bend, and the mode-switch handler), not
+         assumed to hold from the UI alone. FFD and Helix don't participate at all — neither fits the
+         "preserve y, transform x/z" model this relies on.
+         Replaced computeLayerPoint( with computeLayerPointCompound( at the 14 real call sites (mesh
+         construction, panel warp, the tolerance solver, CSV/loft-JSON export, the axis overlay) —
+         all of them already funnel through one or two spots in rebuild(), so every downstream
+         consumer became compound-aware for free, none individually touched or even aware compounding
+         exists. Volume falls back to the same numeric mesh integration FFD already used, since the
+         closed-form formulas (Cavalieri-preserved for twist/shear/bend, the quadratic formula for
+         taper) were each derived for a single operation and chaining genuinely changes the math
+         (Twist then Taper does scale volume, unlike Twist alone) without a new closed form being
+         worth deriving. New Compound section (mode picker + one compact parameter block per
+         secondary mode, sharing state fields with their primary counterparts since the picker never
+         allows the same mode to be both). Caught and fixed two real bugs before shipping: a
+         reference to a nonexistent FT_TO_M constant in the compound shear sliders that would have
+         thrown at first use, and the compound shear sliders' range staying stuck at a narrow static
+         default instead of matching the primary sliders' actual widened runtime range. Reset,
+         loading a case study, and switching primary to Bend/FFD/Helix or to whatever mode is
+         currently the compound choice all clear compoundMode, so it can't silently point at a
+         contradictory or stale configuration. Play/Pause and Compare both continue to work
+         unmodified — Play still only animates the primary's own parameter(s) for now (a disclosed
+         scope decision, not a gap), and Compare/localStorage/the shareable URL all pick up
+         compoundMode automatically since it's just one more field in `state`. Added 11 new
+         audit_deploy.js checks.
+v1.49.0 - 2026-07-19 - More case studies, per user request. Added the Leaning Tower of Pisa as
+         Shear's first case study since Capital Gate was removed in v1.41.0 — height (~56m), lean
+         angle (~3.97°), floor count (8), and base diameter (~15.5m) are all independently sourced,
+         and two of those figures cross-check against each other: height×tan(lean) computes to
+         ~3.89m, matching the ~3.9m horizontal top-offset multiple sources cite directly rather than
+         one number being derived from the other. Ellipse preset (the tower is cylindrical, not
+         faceted). Caveat disclosed: later floors were built at a slight corrective counter-angle
+         once the tilt was noticed mid-construction, so the real lean isn't one straight line the way
+         linear Shear is — a deviation within the same operation, the same single-parameter
+         simplification already accepted for The Shard's taper, not a different-operation mismatch.
+         Investigated and REJECTED two more candidates before either got this far: the Transamerica
+         Pyramid (Taper) has two asymmetric wing buttresses that appear partway up and don't taper
+         with the rest of the building, plus a separate 65m spire; Absolute World/"Marilyn Monroe"
+         (Twist) turned out to also taper inward then back out (a waist) despite its headline "twists
+         209°" stat, the same twist+taper compound that already sank Shanghai Tower. Bend remains the
+         only mode with no case study. Updated an existing v1.41.0 audit check that had asserted no
+         "Case study (real leaning building)" label could exist in Shear's sidebar markup — true when
+         written (right after Capital Gate's removal), but too strict now that Shear legitimately has
+         one again; replaced with a check that the label is tied to a real, currently-defined case
+         study rather than an orphan, preserving the original check's actual intent. Added 4 new
+         checks for Pisa itself. 99/99 audit passing.
+v1.48.0 - 2026-07-19 - Fixed Play doing nothing on Free (FFD), reported by user testing along with a
+         correct diagnosis of why: unlike every other mode, Free has no single scalar deformation
+         parameter to animate — 8 independently-draggable control points instead. startAnimation()'s
+         FFD branch already scaled every offset by the same 0->1 blend factor (a reasonable generic
+         "animate toward the current target," the same idea as every other mode's 0->dialed-in
+         value), but the target IS zero at Free's own default/Reset state (all 8 offsets exactly
+         zero, confirmed in resetModeValues) — so clicking Play with no handle ever dragged flipped
+         the button to Pause and visibly did nothing, reading as broken rather than as "nothing to
+         animate yet." Added a check (any control point's offset magnitude > 1cm — verified the
+         threshold rejects the true default and floating-point noise from an accidental sub-mm nudge
+         while accepting any real drag) that shows a clear toast and declines to start instead of
+         silently entering a no-op Pause state. 1 new audit_deploy.js check.
+v1.47.0 - 2026-07-19 - Three features requested together: animation, comparison mode, more case
+         studies.
+         CASE STUDY: added the Guggenheim Museum NYC's spiral ramp as Helix's first case study —
+         turns (6) and total rise (~92ft/28m) sourced across multiple sources; outer radius sourced
+         too but only as an average, since the real ramp genuinely widens with height (100ft dia. at
+         bottom to 128ft at top) rather than holding one radius, which Helix's fixed-radius Line
+         generator can't represent — same single-parameter-simplification treatment as The Shard's
+         taper estimate, not the compound-mismatch that got Capital Gate/Shanghai Tower rejected.
+         Searched specifically for a real single-axis Bend candidate (curves along its vertical axis
+         without also twisting or tapering) and found nothing that held up — documented in-code
+         rather than forcing a compound building in with an understated caveat. Bend still has none;
+         Shear still has none (v1.41.0). Widened the Helix outer/inner radius sliders (previously
+         6m/3m, sized for generic exploration) to 20m/5m to fit this building's real scale, matching
+         why footprint sliders already go to 30m. Fixed a real gap found while wiring this up:
+         loadCaseStudy() synced every other mode's sliders on load except Helix's — same
+         one-directional bug pattern as the v1.42.0 footprint-reset fix, just never triggered before
+         because Helix never had a case study to expose it.
+         ANIMATION: one Play/Pause button (top of Deformation parameters, not duplicated per mode)
+         ping-pongs the current Operation's own primary parameter(s) between a neutral value and
+         whatever's dialed in. Mutates `state` directly each frame and restores the exact
+         pre-animation values on stop, rather than threading a parallel parameter-override path
+         through computeLayerPoint/buildDeformedGeometry — those already read straight from `state`
+         everywhere, and duplicating that plumbing to avoid a few frames of temporary mutation would
+         be a much larger, riskier change to already-verified geometry code. Runs inside the existing
+         animate() rAF loop and calls the very same rebuild() FFD handle dragging already calls on
+         every pointermove — not a new class of per-frame cost, a new source of an already-accepted
+         one. Verified Bend's β=0 case against the actual formula before relying on it (already
+         safely guarded, straight-fallback at |β|<1e-6) rather than assuming; used a small epsilon
+         for Helix's zero-turns case to avoid a degenerate flat mesh. Stops automatically on manual
+         slider drag, Operation switch, case-study load, or Reset — each of those calls
+         stopAnimation() from inside its own handler (not a second listener racing the first) so a
+         mid-flight switch can never restore stale pre-switch values over what the switch just set.
+         COMPARISON MODE: "Save snapshot" (Compare, Advanced view) clones the current solid as a
+         translucent ghost overlaid on the live model, rather than a literal second synced viewport —
+         this app's single scene/camera/renderer/controls stack is referenced directly throughout
+         rebuild() and every overlay function, and duplicating that whole stack for a real
+         side-by-side view would be a far larger, riskier restructuring than the feature is worth.
+         Ghost geometry: temporarily swap `state` to the snapshot's captured values, call the real
+         unmodified rebuild(), clone solidGroup's resulting mesh(es), swap state back, rebuild()
+         again for the live geometry — reuses the exact same, already-verified geometry path with
+         zero duplicated logic, at the cost of two rebuild() calls once per Save (not per frame).
+         pendingReframe is explicitly held off during the snapshot's own rebuild() and restored
+         before the live one, since both calls share that one global flag and letting the snapshot's
+         call consume it would frame the camera to the wrong geometry and silently drop the live
+         model's own pending reframe. A simple height-only delta readout (both totalHeightM() calls
+         are mode-agnostic and always correct) rather than a volume/area comparison — those differ
+         in meaning across modes (Helix reports surface area, not volume; Free measures via numeric
+         integration) and getting that normalization wrong across six modes felt like a worse outcome
+         than a smaller but honestly-correct comparison. Found and fixed a real bug while wiring the
+         toggle switch: its plain "switch" class would have been swept into the generic
+         overlay-switch initializer (keyed to state.overlays[key], which this isn't) and gotten a
+         second, conflicting click handler — split off a .switch-standalone class sharing the same
+         CSS so the generic loop's selector no longer matches it. Added 16 new audit_deploy.js
+         checks (94/94 passing).
+v1.46.0 - 2026-07-19 - Collapsed the Export section's explanatory text by default, per a screenshot
+         of Advanced mode showing four back-to-back paragraphs (PNG export, share link, loft-profiles
+         JSON, Dynamo script) all expanded at once — exactly the density Simple/Advanced (v1.44.0)
+         was meant to relieve, just re-exposed in full once someone opens Advanced. Wrapped each in a
+         native <details>/<summary> ("What does this do?"), collapsed by default, one shared
+         .info-toggle CSS class so all four (and any future one) look and behave identically —
+         native element means free keyboard/screen-reader support and no JS state to track, closes
+         back to collapsed on reload rather than needing its own persistence. Buttons and the loft-
+         profile-count slider stay always visible; only the prose collapses. Checked the rest of
+         Advanced (Overlays, Units, Projection) for the same pattern — nothing else there is static
+         explanatory prose at this length, it's short dynamic status text, so the fix was scoped to
+         exactly where the clutter actually was rather than added everywhere by default. Added 3 new
+         audit_deploy.js checks (78/78 passing).
+v1.45.0 - 2026-07-19 - Theme pass, per user request to look at "the entire theme design... what else
+         can we do." Checked the actual CSS rather than guessing, which turned up two real gaps
+         before any new feature work: 'Inter'/'Space Grotesk'/'Space Mono' were referenced throughout
+         the stylesheet but never loaded via any <link> or @font-face, so every declaration was
+         silently falling back to system fonts; and --ochre was defined in :root but used nowhere.
+         Three changes, all chosen by the user from a set of options:
+         (1) Loaded the actual fonts (Google Fonts, weights matched to what the CSS already asks
+         for). Added a small inline SVG favicon (there wasn't one). Gave ochre exactly one
+         consistent role — a new .caveat class (ochre text + left border) — applied to the two
+         in-app "illustrative estimate, not sourced" case-study disclaimers and the tolerance
+         solver's "not achievable" message, kept separate from --brick (errors/active state) and
+         --prussian (data/formula), not just decoration.
+         (2) "Blueprint" dark theme — literal architectural-blueprint convention (pale linework on
+         deep blue paper), not a generic inverted dark mode. New "Light"/"Blueprint" toggle in the
+         View section, `[data-theme="dark"]` CSS variable overrides so every DOM color updates
+         automatically. Along the way found two hardcoded #fff values (active preset-button
+         background, the toggle switch's on-state knob) that would have gone low-contrast against
+         Blueprint's lighter prussian — fixed both to the theme-aware --paper instead, and added a
+         --paper-rgb companion variable so the three HUD/legend translucent backgrounds (previously
+         hardcoded rgba(251,250,246,...)) theme correctly too. Kept in uiPrefs (not `state`), same
+         reasoning as v1.44.0's uiMode/sidebarWidthPx — a screen preference, not part of the building
+         a share link hands someone.
+         (3) Graph-paper ground grid — THREE.GridHelper (not a CanvasTexture-as-scene.background,
+         to sidestep that technique's version/mapping-dependent tiling behavior) sitting in `scene`
+         directly, not solidGroup/overlayGroup, confirmed safe against both camera-fit functions
+         (frameCameraDefault/fitBoxDistance both already scope to solidGroup only, not the whole
+         scene) and against every overlay/Simple-Advanced toggle. Regenerated (not just recolored)
+         on every theme switch, since GridHelper's two-tone color comes from per-vertex color
+         attributes set at construction, not a material property that can be reassigned after the
+         fact. Added 9 new audit_deploy.js checks (75/75 passing).
+v1.44.0 - 2026-07-19 - Sidebar overhaul, per user feedback: "the right side panel is getting clunky
+         un organized... simple and advanced mode - each mode needs to be consistent... also this
+         panel should be stretchable." Two independent changes:
+         (1) Simple/Advanced view toggle (new "View" section, top of sidebar). Simple hides four
+         sections consistently, regardless of which Operation is selected: Units, Projection,
+         resolution (slices), Overlays (including the whole panel-warp toolchain), and Export.
+         Operation/Cross-section/Deformation-parameters/Reference stay visible in both modes — "the
+         shape itself" vs. tooling around it. Deliberately kept OUT of the model `state` object (and
+         so out of localStorage's model key, Reset Values, and the v1.40.0 shareable-URL encoding) —
+         this is a screen/workflow preference, not part of "the building" a share link is supposed to
+         hand someone; persisted under its own 'spira-ui-prefs' localStorage key instead. Defaults to
+         Simple on first load.
+         (2) Resizable sidebar — a 6px drag handle between viewport and sidebar, Pointer Events (not
+         mouse-only, so touch/pen work too) with setPointerCapture so a fast drag off the thin handle
+         doesn't drop the gesture. Width lives in a --sidebar-width CSS custom property (the existing
+         aside{width:...} rule just reads it, no other CSS touched), clamped to 260–min(640,60vw), and
+         calls the existing resize() every pointermove so the 3D viewport visually keeps pace with the
+         drag rather than only updating once released. Also persisted in 'spira-ui-prefs', separate
+         from model state for the same reason as (1). Hidden entirely on the existing mobile
+         breakpoint, where the sidebar already stacks full-width below the viewport and a width drag
+         wouldn't mean anything. Added 6 new audit_deploy.js checks (66/66 passing).
+v1.43.0 - 2026-07-19 - Fixed a one-directional overlay-switch sync bug, prompted by a user question
+         about whether blue reliably means "on" throughout the app. The color rule itself was
+         already fully consistent (all nine overlay switches share one CSS class and one click
+         handler, prussian blue #1f4e79 = on, tan = off) — but page-load init only ever ADDED the
+         'on' class (`if(state.overlays[key]) sw.classList.add('on')`), never removed it. Five of the
+         nine switches (Axis A, Base plane B, Ruling lines, Slice rings, Floor lines) default to true
+         and have class="switch on" hardcoded in the static markup; a saved session or shared link
+         (v1.40.0) where one of THOSE FIVE happened to be false would load with the switch showing
+         blue/on while the overlay was actually off — a genuine visual/state mismatch, not just a
+         one-off. Fixed by switching init to `sw.classList.toggle('on', !!state.overlays[key])`,
+         which forces the class to match the boolean exactly regardless of which way the markup and
+         the loaded state disagree. Verified with a minimal classList simulation covering all four
+         markup/state combinations (including the two that already worked, to confirm no regression)
+         before shipping. Added 1 audit_deploy.js check (60/60 passing).
+v1.42.0 - 2026-07-19 - Fixed "Reset values" leaving footprint width/depth untouched, reported with a
+         screenshot of Bend's Reset producing a self-overlapping fan/pac-man shape instead of a
+         tower. Root cause, confirmed by the math in computeLayerPoint's bend case (worldY =
+         (R − p[1])·sinθ): a footprint left over from a prior mode or case study can have a
+         half-extent larger than the bend radius R = h/β, which flips (R − p[1]) negative and folds
+         the swept solid back through its own axis — the profile itself, not just the deformation
+         parameter, has to be back at a sane scale for the reset shape to make sense. At the true
+         fresh-load defaults (2×2m footprint, half-extent 1m vs R≈8.91m at β=180°, 28m tall) this
+         never happened, which is why it looked like only Bend's specific default was broken; the
+         real gap was that Reset never restored footprint at all, so *any* mode's Reset could inherit
+         a wildly mismatched scale from whatever was last loaded. Added footprintWidthM/footprintDepthM
+         to MODE_DEFAULTS for twist/taper/shear/bend (helix and ffd don't use footprint) and added
+         syncFootprintSliderRange() to resetModeValues() so the sidebar sliders actually reflect the
+         restored value, not just internal state. Verified numerically: reproduced the exact reported
+         scenario (stale 75.5ft footprint, 8 floors × 3.5m, β=180°) and confirmed it inverts
+         (half-extent 11.51m > R 8.91m), then confirmed the fixed default (half-extent 1m, ratio
+         ≈0.11) does not. Added 4 new audit_deploy.js checks (59/59 passing).
+v1.41.0 - 2026-07-19 - Removed Capital Gate as Shear's case study, per user feedback: "the two best
+         case study's samples are: turning torso and cayan tower. capital is not even close to what
+         the actual projects is in real life." Checked further rather than taking the caveat already
+         in place (nonlinear lean rate) as sufficient: the real building's floor plates don't just
+         lean, they change SHAPE and orientation with height ("curved triangular" to "curved
+         rectangular," per Skyscraper Center and RMJM's own case study), and its form is described as
+         curved/organic throughout — a genuinely different, compound deformation, not a straight
+         cross-section on a straight (if nonlinear) lean. That's the same bar Shanghai Tower and The
+         Bow already got rejected on; the original v1.17.0 caveat understated the actual mismatch.
+         Shear now has no case study, matching Bend and Helix. Updated README, EXTENDED.md's
+         rejected-case-studies reasoning is unaffected (Capital Gate documented inline in index.html
+         instead, next to where it was removed, since it wasn't in EXTENDED's rejection list before).
+v1.40.0 - 2026-07-19 - Added a shareable URL — third item on the feature-list priority order
+         (tolerance solver, PNG export, then this). "Copy share link" (Export section) encodes the
+         entire state object (mode, preset, every deformation parameter, footprint size, floors/
+         floor-height, units, projection, resolution, panel-subdivision/tolerance-target, every
+         overlay toggle, FFD control-point offsets) as URL-safe base64 in the location hash
+         (#s=...) rather than a query string, since a hash never leaves the browser — no server,
+         no Netlify access log, ever sees it, appropriate for a fully client-side static app. On
+         load, a shared link's state is applied AFTER the existing localStorage restore, so it
+         always wins over whatever the recipient's browser had saved — the whole point of sending
+         a specific configuration. Deliberately does not encode camera orbit/position: pendingReframe
+         already defaults true, so the first rebuild() after load re-fits the camera the same way
+         every Operation/preset switch already does (v1.23.0), which reproduces the sender's intent
+         better than pinning their exact viewing angle would. Verified round-trip headlessly (encode
+         every mode's default and a modified/non-default state, decode, deep-equal check against the
+         original) before wiring into the UI. Clipboard write uses the async Clipboard API with a
+         textarea+execCommand fallback for contexts where it's unavailable.
+v1.39.0 - 2026-07-18 - Added "Export view (.png)" to the Export section — second item on the
+         feature-list priority order (tolerance solver, then this). Captures exactly what's on the
+         WebGL canvas at the moment of the click: current camera angle, Perspective/Orthographic
+         projection (v1.38.0), the solid, and every in-scene overlay (axis, rulings, point labels —
+         real Sprite/Mesh/LineSegments objects, so they render into the canvas like anything else).
+         Added preserveDrawingBuffer:true to the renderer, required for canvas.toBlob() to reliably
+         capture anything in a continuously-rendering app — WebGL clears its drawing buffer after
+         compositing by default, so without this flag a screenshot taken any time after the frame
+         that drew it can come back blank. Disclosed the real limitation directly in the button's
+         own description rather than leaving it to be discovered: the sidebar HUD panel and the
+         panel-warp legend are separate HTML elements positioned over the canvas via CSS, not part
+         of the Three.js scene, so they can't be captured this way and aren't included.
+v1.38.0 - 2026-07-18 - Added a real Perspective/Orthographic projection toggle, per user request:
+         "we have top front home views which are just oriented 3d views. we need real ortho views."
+         Correct — Top and Front were true to their view DIRECTION but still perspective-projected,
+         so even a straight-down plan or straight-on elevation had perspective foreshortening, not
+         the true parallel projection a real plan/elevation view needs (the standard CAD convention
+         Revit/AutoCAD/Rhino all follow). Given a choice between ortho-only-for-Top/Front, ortho-
+         everywhere-always, or a toggle, went with a global toggle (persisted in state, applies to
+         Home/Top/Front/free-orbit alike) so it's available whenever wanted rather than tied to
+         which button was last clicked. Two camera objects (perspCamera/orthoCamera) share one
+         positionCameraForFit() — perspective computes a fit distance from FOV math (unchanged from
+         v1.31.0); orthographic instead sets a frustum half-height directly and resets zoom to 1,
+         since an orthographic camera's apparent size comes from its frustum, not its distance from
+         the subject. Switching projection re-fits fresh with the new camera rather than trying to
+         convert a perspective distance into an equivalent ortho zoom (not the same concept, so no
+         such conversion is ever exact) — but preserves the exact view direction and target the user
+         was already looking at/from, so switching only changes how depth projects, never reorients
+         the view or resets pan. resize() updates both cameras' projections every time regardless of
+         which is active, so switching mid-session is always correct without a stale frustum.
+         Verified the fit math against real THREE.js camera objects (not just index.html review):
+         installed three@0.128.0 standalone, built the actual view-projection matrix, and confirmed
+         a point at 99% of the padded radius lands inside the [-1,1] NDC clip volume while one at
+         100.1% falls just outside — the orthographic frustum brackets the model with exactly the
+         same 15% pad the perspective fit already used, boundary-precise in both directions.
+v1.37.0 - 2026-07-18 - Fit-and-finish list fully clear; working through the feature list, highest
+         priority first, starting with the tolerance solver (natural inverse of v1.28.0's
+         subdivision slider). Added "Solve for minimum panels": set a target max warp, click Solve,
+         get the smallest per-face subdivision count that meets it, with a one-click Apply. Sweeps
+         N=1..12 through the exact same subdivideProfileForPanels()/computePanelWarp() calls the
+         live overlay uses — never assumes the roughly-linear warp-vs-width relationship that
+         motivated adding this feature, verifies each N directly, since that relationship is only
+         approximate for non-axis-aligned edges. Reports an honest "not achievable up to 12 panels"
+         with the best available figure when the target is tighter than 12 panels can reach, rather
+         than a misleading result. Deliberately a button, not a live sweep on every rebuild() —
+         re-running up to 12 full panel-warp computations on every slider tick during a live drag
+         (Helix at high resolution especially) risked reintroducing exactly the frame-rate jank the
+         v1.24.0/v1.33.0/v1.34.0 fixes were about avoiding, for a result only actually needed once,
+         on request. Verified headlessly against the already-verified Turning Torso numbers before
+         shipping: target=1000mm finds N=1 (665mm, correctly under), target=100mm finds N=7,
+         tighter targets (50/25/10mm) correctly report not-achievable with best=55.7mm at N=12.
+v1.36.0 - 2026-07-18 - Fit-and-finish list fully clear; started on the feature list (panel schedule
+         export, first). Added "Export panel schedule (.csv)", shown alongside the other Panel
+         flatness controls only while that overlay is on. One row per panel currently being
+         analyzed — panel_id, floor/turn index, edge index, width (mm and ft), warp (mm and in), a
+         severity label (green/amber/red, using the exact same 0/25/50mm thresholds warpColor()
+         renders with, so a row's label always matches the panel's on-screen color), and all 4
+         corner coordinates in the same Y-up->Z-up remap the loft-profiles JSON export already
+         uses, for direct usability in a CAD/BIM pipeline. Recomputes fresh from lastBuild via
+         computePanelWarp()/subdivideProfileForPanels() — the exact same functions, current
+         floors/floorHeightM (or Helix's segs/h), and current panelSubdiv the live overlay and HUD
+         already use — rather than a second implementation that could drift out of sync, the same
+         principle buildLoftProfilesJSON already followed. lastBuild now also stores segs (needed
+         for Helix's per-rebuild panel granularity, previously only a local variable inside
+         rebuild() itself). Verified headlessly before shipping: panel count matches floors x
+         (edges x subdivision) exactly (54 floors x 20 sub-edges = 1080 panels), and floor_index/
+         edge_index/width values match the already-verified Turning Torso subdivision numbers.
+v1.35.0 - 2026-07-18 - Added a "Colorblind-safe palette" toggle for Panel flatness (warp), the last
+         real item on the fit-and-finish list (audit_deploy.js/Dynamo script consistency remains
+         blocked without those files being re-uploaded). Default green->amber->red is exactly the
+         pair deuteranopia/protanopia (the two most common colorblind forms) struggle to
+         distinguish. New alternate palette uses Viridis' own stops (dark purple -> teal -> yellow)
+         — a colormap specifically designed to be both colorblind-safe and perceptually uniform, so
+         severity still reads correctly by brightness alone, not just hue. Toggleable rather than a
+         replacement, since plenty of people prefer the intuitive green-good/red-bad read when it
+         isn't a barrier for them. Shown alongside the subdivision slider, only while Panel flatness
+         is on; the in-canvas legend's gradient bar switches to match via a CSS class rather than a
+         second hardcoded gradient, verified the interpolation hits the exact stop colors at
+         t=0/0.5/1 before shipping. warpColor()'s two-stop lerp logic factored into a shared
+         lerpPaletteStops() helper so both palettes go through identical interpolation math.
+v1.34.0 - 2026-07-18 - Closed out the last open item from the fit-and-finish list: sliders that
+         change the model's actual size/shape (floors, floor-to-floor height, footprint width/
+         depth, every deformation parameter, every Helix dimension) never triggered a reframe at
+         all, even on a drastic change — only button-triggered actions did (Operation, preset, case
+         study, Reset values, v1.23.0), deliberately, so a live drag never yanks the camera
+         mid-gesture. That was flagged earlier as risky to fix broadly, since the obvious approach
+         (reframe on every 'input' tick) would reintroduce exactly the jump v1.24.0 fixed. The
+         actual fix: listen for 'change' instead of 'input' — it fires once when a slider is
+         released (mouseup) rather than continuously during the drag, so live-dragging is completely
+         unaffected (camera never moves mid-gesture) but letting go of a big change now properly
+         re-fits instead of leaving the model stranded outside the frame with no recovery short of
+         manually clicking Home. Same treatment for the click-to-type editable value fields, via
+         their commit() handler, for typed values — except resolution/segments, which doesn't
+         affect model size and stays reframe-free like the other purely-visual-density sliders
+         (loft profile count, panel subdivision).
+v1.33.0 - 2026-07-18 - Fixed a real bug user reported/screenshotted: "view clipping/culling...
+         need the ability to zoom out further" on a big model (100 floors, 1350ft tall). Root
+         cause: camera.near/camera.far were only ever set once per view-fit (inside Home/Top/Front/
+         the first rebuild), sized for that specific fit distance — OrbitControls itself has no
+         maxDistance set, so scrolling to manually zoom out further is technically unbounded, but
+         doing so eventually exceeds the far plane computed for the ORIGINAL fit distance, and the
+         model gets clipped/culled out of view entirely. That reads exactly like being capped —
+         the camera can still move back, there's just nothing left to see. Fixed by recomputing
+         near/far every frame in animate(), from the camera's actual live distance to the orbit
+         target, using a cached model-radius buffer (lastModelRadius, updated once per rebuild()
+         rather than per frame — a full Box3 traversal is cheap next to everything else rebuild()
+         does, but not something to repeat 60x/second). near/far now always bracket the visible
+         content correctly at any zoom level, in or out, with no artificial ceiling — replacing the
+         previous approach where near/far were only ever correct for whatever distance existed at
+         the moment a view button was last clicked.
+v1.32.0 - 2026-07-18 - Fit-and-finish pass, audited for issues rather than waiting on another
+         report. Found and fixed one real gap: the mobile breakpoint (max-width 760px) scales down
+         #hud and #viewControls but #warpLegend (added v1.26.0, after that breakpoint already
+         existed) never got the same treatment — on a narrow phone, where the viewport itself is
+         already squeezed (aside takes up to 46vh at the bottom), the legend's full-size 150px bar
+         could crowd the Top/Front/Home buttons sharing the same bottom row. Now shrinks alongside
+         everything else at that breakpoint. Also verified (not just assumed) several related areas
+         while auditing: Helix Line generator's open (2-point, 1-edge) profile subdivides correctly
+         under panel warp's new subdivision slider (headless-checked, not just the closed-polygon
+         case already verified in v1.28.0); FFD handle dragging is unaffected by Panel flatness
+         hiding the solid, since handles raycast against their own array in overlayGroup, never the
+         solid itself; Reset Values intentionally leaves panel subdivision untouched, consistent
+         with how it already leaves every overlay toggle untouched (a view/analysis preference, not
+         a deformation parameter) — confirmed as by-design rather than an oversight. Minor comment
+         accuracy fix: a v1.27.0 comment referenced "frameCameraDefault()'s Box3 fit" specifically,
+         written before v1.31.0 split that into a shared fitBoxDistance() serving all three view
+         buttons — updated to match.
+v1.31.0 - 2026-07-18 - Fixed a real framing bug user reported/screenshotted on Front view: a
+         tall/narrow building (The Shard's Taper case study, 1015.7ft tall on a 91.9ft footprint)
+         filled the viewport almost edge-to-edge vertically with no padding margin, while leaving
+         most of the width empty — not an actual "zoom to fit," just a coincidence of the old
+         height-only heuristic. Root cause: frameCameraTop()/frameCameraFront() used a separate,
+         older distance formula (dist = h * a fixed multiplier, no bounding-box math at all) that
+         predates frameCameraDefault()'s (Home's) proper Box3 fit and was never upgraded to match
+         it — computed and confirmed numerically that the old Front formula's distance (~232m for
+         The Shard) fell well short of the ~400m+ actually needed to fit the full height within the
+         camera's vertical FOV, let alone with Home's 15% padding. Refactored the fit math (real
+         Box3 → circumscribed-sphere radius → checked against both horizontal and vertical FOV,
+         whichever is more restrictive → 15% pad) into a shared fitBoxDistance() helper, and
+         switched Top and Front to use it — same fit quality as Home now, for all three buttons,
+         regardless of how tall/narrow or wide/short the model is. Each button still positions the
+         camera along its own axis (Top: straight down; Front: along -z) and Top still keeps its
+         OrbitControls-singularity workaround (swapped up-vector, sub-mm position epsilon).
+v1.30.0 - 2026-07-18 - Fit-and-finish pass, three items. (1) The Panel flatness legend's gradient
+         clamps at 50mm — every panel past that renders identically red, so a model at 51mm and one
+         at 200mm looked the same. Added a marker on the gradient bar at the actual max warp
+         position, plus an explicit "actual max: Xmm (off scale)" reading when it exceeds the
+         display range, so the real severity is never hidden behind a maxed-out color. (2) Wireframe
+         toggle silently did nothing while Panel flatness was on, since that overlay hides the solid
+         itself (v1.27.0) and there's nothing left to wireframe — now dims and disables that row
+         while Panel flatness is active instead of leaving a dead switch with no explanation.
+         (3) README.md and EXTENDED.md refreshed to cover everything shipped since v1.22.0 that
+         never made it into the standalone docs (only the in-file changelog and Help modal had it):
+         the subdivision slider, panel outlines, the legend and its marker, solid auto-hide, and
+         Helix's render-resolution panel granularity. Also corrected EXTENDED.md's Camera framing
+         section, which still described the old one-shot hasFramedOnce guard superseded by
+         pendingReframe back in v1.23.0, and added a new "Overlay decoration sizing" section
+         documenting footprintExtent (v1.23.0), which had no standalone-doc coverage at all despite
+         fixing several real bugs (oversized labels/cones on tall buildings, Bend's giant base plane).
+v1.29.0 - 2026-07-18 - User reported the panel boundaries were faint/unreadable after using the new
+         "subdivide each face into N panels" slider (v1.28.0) — checked the sidebar label's CSS
+         first (identical markup/classes to every other slider-row label, ruled out as the cause),
+         so this is about the 3D view: with a face split into several bays, neighboring panels often
+         land at similar-enough warp values to get near-identical fill colors, and since the overlay
+         only ever drew filled color, not boundaries, a subdivided face read as one undifferentiated
+         wash rather than N distinct panels. Added a dark outline (LineSegments, 4 edges per panel)
+         around every panel-warp quad, nudged slightly further out than the fill (0.045 vs 0.03) so
+         it never z-fights with its own panel underneath — panel boundaries now stay clearly visible
+         regardless of how similar two neighboring panels' colors happen to be.
+v1.28.0 - 2026-07-18 - Added a "subdivide each face into N panels" slider (1-12, shown under Panel
+         flatness while that overlay is on) after the user asked whether Turning Torso's 26.2in max
+         panel warp figure meant the case study's dimensions were wrong. They weren't — 90 degrees
+         over 54 floors on a sourced 23m footprint is correct, and re-deriving it standalone
+         reproduced 26.22in exactly. What that number actually exposed: the app's 4-corner Square
+         profile treats an entire ~75ft-wide building face as ONE panel, which is not how any real
+         twisting facade is built — real curtain walls break each face into many narrower bays
+         specifically because warp scales roughly linearly with panel width for a given rotation
+         rate (verified: 23m/1 panel = 26.2in, 11.5m/2 panels = 13.2in, ... 2.3m/10 panels = 2.6in,
+         a near-exact linear relationship). New subdivideProfileForPanels() interpolates additional
+         points along each straight edge of the flat, undeformed profile before layerPointFn
+         deforms them — subPerEdge=1 is a verified true no-op (identity, not just numerically equal)
+         so default behavior is unchanged. Sidebar shows a live "~Xft wide panels" readout (computed
+         from the actual first panel's edge length every rebuild) so the real-world bay size behind
+         whatever N is chosen is never left to guesswork. Applies uniformly to every mode via the
+         same profile/layerPointFn pattern as the warp computation itself.
+v1.27.0 - 2026-07-18 - User reported color jitter/flicker between the solid surface and the Panel
+         flatness (warp) overlay's panels — z-fighting, worst at grazing viewing angles where the
+         existing 3% outward nudge isn't enough screen-space separation on some GPUs/drivers, asked
+         for "a panel analysis mode where the blue rendered form is not there." Rather than pushing
+         the nudge further out (which would visibly detach the panels from the surface they
+         describe, undermining the whole point of the overlay), the solid (side + caps) now hides
+         itself automatically while Panel flatness is on — the color-coded panels already cover the
+         same surface at real floor/edge resolution, so nothing readable is lost, and there's no
+         longer any coincident geometry left to fight with. Every other overlay (rulings, slice
+         rings, floor lines, axis, base plane) stays visible underneath, unaffected. Implemented via
+         mesh.visible=false rather than skipping solidGroup.add() — Box3.setFromObject() (which
+         frameCameraDefault() uses to fit the camera) traverses regardless of .visible, so camera
+         framing still sees the hidden solid's true extent and isn't thrown off by hiding it.
+v1.26.0 - 2026-07-18 - Added an in-canvas color legend for Panel flatness (warp), per user request
+         after a screenshot showing the overlay working well on Taper+Ellipse ("the best example
+         I've seen"). Previously the green->amber->red gradient on the model had no key anywhere in
+         the viewport itself — only a single "max panel warp" number in the sidebar HUD, which
+         doesn't explain what a mid-gradient amber panel actually means. New bottom-left panel
+         (shown only while the Panel flatness toggle is on) shows the same gradient bar with 0 /
+         25(unit) / 50(unit)+ tick labels, using the same illustrative 0-50mm range warpColor()
+         already renders from and the same mm/inch unit conversion (toDisplaySmallLen/smallLenUnit)
+         the HUD row already uses, so the two stay numerically consistent with each other and update
+         together on a Metric/Imperial toggle.
+v1.25.0 - 2026-07-18 - Fixed a real bug user spotted from a screenshot — a large flat green plane
+         cutting straight through the Helix Line generator's ramp with Panel flatness (warp) on.
+         Root cause: the panel-warp overlay reused floor lines' turns/pitch as its loopCount/stepM
+         for Helix, same as every other overlay that treats one full 360-degree turn as Helix's
+         analog to a floor — reasonable for floor LINES (a ring is a ring regardless of size), but
+         wrong for panel WARP, where the quad's four corners are what gets drawn. Line's generator
+         has only 2 profile points (1 edge, spanning the whole ribbon from inner to outer radius),
+         so each "panel" connected a turn's start to its end — landing at the exact same angle one
+         full revolution later — as one huge, genuinely flat (0.000mm warp, verified) quad that
+         doesn't remotely track the helical surface between those two points, rendering as a solid
+         plane where no such surface exists. Switched Helix's panel-warp granularity from
+         turns/pitch to the render resolution (segs/h-per-segment) instead — small enough for the
+         flat-quad approximation to actually approximate the surface (verified: max panel diagonal
+         span dropped from 3.86m to 1.4m at default params, warp went from a misleading 0.000mm to a
+         real ~31.6mm reflecting genuine local curvature), and a legitimate fabrication-relevant unit
+         for a helical ribbon in its own right (small flat stringer segments, not one full turn, are
+         how such a ramp would actually be built from stock). Floor-based modes (Twist/Taper/Shear/
+         Bend/FFD) untouched — floors remain the deliberate real-architectural-panel unit there.
+v1.24.0 - 2026-07-18 - Fixed a real bug reported as "toggle Panel flatness off, canvas frame jumps" —
+         the toggle was incidental, not the cause. rebuild() (which runs on every slider tick and
+         every overlay checkbox, not just Panel flatness) was unconditionally calling
+         controls.target.set(0, h/2, 0) at its end, every single time. OrbitControls.update() runs
+         every animation frame regardless of what triggered it, so that reset silently snapped any
+         panning the user had done back to dead-center on the very next frame after ANY interaction
+         — the jump was just most noticeable on a toggle click, which doesn't otherwise touch the
+         model. Removed the unconditional reset; frameCameraDefault() already sets controls.target
+         correctly (to the actual fitted box center) and only runs when pendingReframe is true
+         (v1.23.0), so it alone owns the target now — consistent with camera position/distance,
+         which likewise only move on an actual reframe, never a plain slider drag or toggle.
+v1.23.0 - 2026-07-18 - Fixed two real, user-reported readability bugs, both worst at real-building
+         case-study scale. (1) Camera framing: frameCameraDefault() only ever auto-fit once, on the
+         very first rebuild() (hasFramedOnce), by design (v1.7.1) so mid-session slider drags never
+         yank the view — but that same guard meant switching Operation, cross-section preset, Helix
+         generator, a case study, or Reset values (all of which can change the model's size/shape/
+         position drastically) left the camera fit to whatever the PREVIOUS model was, sometimes
+         framing empty space or a sliver of the new one (screenshots: Helix nearly invisible after
+         switching from Taper; Bend's base plane filling the whole viewport with the actual solid
+         tiny in a corner). Replaced the one-shot boolean with a pendingReframe flag that those
+         specific button handlers set — ordinary slider `input` events still don't, so live-dragging
+         a parameter is unaffected. (2) Overlay decorations (point labels, axis arrowhead cone,
+         origin marker, surface-normals overlay, base plane B, FFD handles) were all sized/scaled
+         off total model height h alone. Fine for a roughly cube-proportioned model, but wrong two
+         different ways for a tall/narrow real building like The Shard (309.6m tall, ~28m footprint):
+         label sprites scaled to h ballooned to ~12.5m wide against a 28m-wide base — readable in
+         isolation, but the point-labels loop ALSO picked its sample points by raw array index
+         (first min(n,10)), which is every real corner on a low-vertex polygon (square/triangle/
+         hexagon/octagon/star, all n<=10) but only a tightly-clustered ~90 degree arc on a smooth
+         32-point Ellipse or 24-point Helix Circle/Pipe generator — so oversized labels landed
+         directly on top of each other by construction, independent of size. Fixed both: labels now
+         sample evenly around the loop (stride = n/numLabels, a no-op for n<=10 polygons), and every
+         decoration's size now derives from a new footprintExtent value (the (x,z) bounding extent
+         of the model's own BASE ring only, computed once per rebuild and reused everywhere) instead
+         of h. That same footprintExtent fix also corrected base plane B, which had the same root
+         bug one level up: v1.21.0 sized it from the planar bounding extent of EVERY layer (correct
+         for Twist/Taper, which stay above their own footprint, but wrong for Bend, whose solid
+         sweeps sideways through world space as it curves — the "base plane" was measuring the whole
+         curved solid's footprint, not the actual base cross-section, which is exactly the huge
+         diamond in the Bend screenshot). Verified visually against all four reported screenshots
+         (Taper+Ellipse label mass, Helix invisible-after-switch, Shear+Ellipse label mass, Bend
+         oversized base plane) before shipping.
+v1.22.0 - 2026-07-18 - Added a "Panel flatness (warp)" overlay, following up on the panel-planarity
+         topic raised at the end of the last session (every SPIRA operation except pure extrusion
+         produces non-planar floor-to-floor panels in general — a real curtain-wall/cladding
+         concern, not just a rendering curiosity). For every real floor-to-floor, edge-to-edge
+         panel (not the fine render mesh — the actual four corners a fabricator would work from),
+         computes warp as the classic curtain-wall "twist" tolerance metric: the plane through three
+         of the panel's four corners, and the perpendicular distance of the fourth corner from that
+         plane. Rendered as a translucent color-coded quad per panel (green -> amber -> red over an
+         illustrative 0-50mm range, same "illustrative, not sourced" framing as the case-study
+         footprint estimates) nudged outward from the solid using the same centroid-based technique
+         as slice rings/floor lines. New HUD row reports max panel warp in mm (or inches in
+         Imperial) — a finer unit than the existing m/ft length readouts, since warp values are
+         small relative to the model. The warp computation itself always runs (cheap: floors x
+         edges, not floors x resolution), so the HUD number is live even with the visual overlay
+         off; only the colored quads are gated behind the toggle. Applies uniformly across all six
+         modes via the same layerPointFn/profile/closed pattern as floor lines and the normals
+         overlay, including Helix (panels between turn boundaries and generator segments). Verified
+         the warp math headlessly before shipping (straight prism and pure Shear both measure exactly
+         0, matching that translation is an isometry; axis-aligned rectangle panels under Taper also
+         measure exactly 0 even when V≠W, since an edge with one coordinate held constant has no
+         bilinear cross-term to warp with — non-axis-aligned edges, e.g. on Triangle, do warp under
+         asymmetric Taper as expected). Turned up a genuine finding along the way: Bend's panels
+         measure exactly flat (to floating-point precision) at every angle and cross-section tried,
+         unlike Twist — because Bend never rotates the local x/bend-axis direction, only sweeps the
+         cross-section along an arc, it's structurally a cylindrical bend of a flat sheet (developable
+         surface), not a twist. Added a note about this to Bend's Reference panel text.
+v1.21.0 - 2026-07-18 - Graphics consistency audit, per user request ("really big axis lines... this
+         should be audited and reviewed"). Found and fixed three real issues: (1) Base plane B was a
+         hardcoded size=4.2 regardless of the actual model — fine at classroom scale, but far smaller
+         than the solid itself on any real-building case study (Cayan Tower's footprint alone is
+         ~22m). Now derived from the model's own planar (x,z) bounding extent via layerPositions, so
+         it's correct for every mode without per-mode special-casing. (2) Axis arrowhead cones were
+         hardcoded (0.09, 0.3) — invisible on a 300m case study, oversized on a small model. Now
+         scale with height via the same Math.max(proportional, floor) pattern already used for the
+         origin marker/FFD handles/normals overlay. (3) Floor lines had two different techniques
+         solving the identical z-fighting problem depending on mode (profile-coordinate scaling for
+         non-helix, centroid-based nudge for helix, itself only added last session to fix Pipe) —
+         unified on the single centroid-based technique everywhere. Also trimmed the Axis A overshoot
+         ratio 1.35x -> 1.15x — always scaled correctly with model height (not a bug), but read as
+         oversized/dominant, especially now that case studies make the line long in absolute terms
+         too. Verified the new size formulas numerically across small/classroom and real-building
+         (Cayan Tower, The Shard) scale before shipping.
+v1.20.0 - 2026-07-18 - Added a "Surface normals (debug)" overlay, off by default, per user request
+         after a session of chasing normal-orientation bugs (inward-facing Circle/Pipe and Ellipse
+         normals, both caught only via headless Node scripts before shipping). One short outward
+         segment per profile corner per FLOOR (not per resolution slice, which can run past 100 and
+         would be an unreadable haze) — reuses the exact same finite-difference technique the mesh
+         builders themselves use for their own analytic normals, so this is a faithful debug view of
+         what the render mesh is actually doing rather than a separate approximation, and branches
+         the cross-product order the same way buildHelicalGeometry vs. buildDeformedGeometry's own
+         paths do (see existing comments on why they differ) rather than getting Helix backwards.
+         While building it, found and fixed a related latent bug in the existing "Turn lines" overlay
+         (Helix's floor-lines equivalent): it called the raw radial-sweep formula directly instead of
+         the per-mode evaluator, which would have been wrong for the Pipe generator specifically —
+         same bug class fixed for point labels and the loft-profiles exporter in v1.15.0, just missed
+         here since Turn lines predates Pipe. Switched its z-fighting nudge to the generic centroid-
+         based technique slice rings already use (v1.14.2) instead of a profile-coordinate scale that
+         only made sense for the old radial-sweep formula, fixing both issues in one change.
+v1.19.1 - 2026-07-18 - Fixed The Shard's taper — user screenshot showed a needle-thin spike with no
+         resemblance to the real building ("very big spire that does not exist"). The v1.19.0
+         estimate (taperV=taperW=0.15) was wrong, not just imprecise: SPIRA's Taper is a single
+         LINEAR taper across the whole height, but the real Shard stays visibly broad through most
+         of its height and only narrows sharply in its top ~15 (largely unoccupied, structural)
+         floors of ~95 — forcing a linear taper to reach 0.15x width at the top spreads that
+         narrowing across the entire building instead of concentrating it near the top the way the
+         actual silhouette does. Revised to 0.4, a considerably blunter, more visually plausible
+         compromise for what a single linear taper can represent — still an estimate, not a sourced
+         ratio, same as before.
+v1.19.0 - 2026-07-18 - Added The Shard (Renzo Piano, London, 2012 — 309.6m, 95 floors, tapers to a
+         near-point) as a case study for Taper, first case study outside Twist/Shear. Height and
+         floor count are sourced (Wikipedia, Skyscraper Center, WSP's own engineering write-up); the
+         taper amount itself (V=W=0.15) is NOT — no published base-width/top-width ratio was found
+         despite several searches, so it's an illustrative estimate matching the building's famous
+         silhouette, same category as every case study's footprint size. Investigated two other
+         candidates from the same research pass and declined both for now rather than force a fit:
+         Lotte World Tower's own architects (KPF) describe its taper as "a continuous curve"
+         (inspired by celadon pottery), not the straight-line taper SPIRA's Taper mode models — a
+         real geometric mismatch, the same category of problem that ruled out The Bow for Bend, not
+         just an unsourced parameter; 20 Fenchurch Street ("Walkie-Talkie") would be an interesting
+         flare-instead-of-taper example (SPIRA's V/W already support >1 scale factors) but its
+         profile is described the same way as Lotte's — curved, not straight — and no numeric
+         base/top ratio was found either. Bumped the floors slider max 80->100 to fit The Shard's 95.
+v1.18.0 - 2026-07-18 - Added Octagon and Ellipse cross-section presets (user's request for more
+         realistic footprint shapes alongside Star, which stays — "fun to play with" per the user,
+         just no longer the only non-rectilinear option). Octagon is a straight-edge n-gon, same
+         treatment as Square/Triangle/Hexagon/Star (faceted panels, sharp corners — real corners on
+         a real polygon). Ellipse required a genuine architecture addition: it has no real corners
+         anywhere around its loop, so faceting it into 32 private sharp-edged panels (its sample
+         count) would show visible facets on something meant to read as smoothly curved — the same
+         problem Helix's Circle/Pipe generator solved in v1.17.1. buildDeformedGeometry gained a
+         smoothCrossSection path (new PRESET_SMOOTH lookup, currently just {ellipse:true}): shared
+         vertices around the whole loop instead of per-edge duplication, analytic per-vertex normals
+         via finite difference across neighboring PROFILE points (approximating the true ellipse
+         tangent) crossed with the height tangent — same technique as the faceted path's exact
+         straight-edge tangent, just approximate instead of exact since there's no single straight
+         edge to be exact about. Initially shipped with an inverted normal sign (100% inward-facing
+         in headless testing) from copying buildHelicalGeometry's cross-product order, which uses a
+         different winding convention than buildDeformedGeometry's own faceted path — caught before
+         release, fixed to match the faceted path's own order instead. Verified headlessly (Node +
+         three.js): 0 inward-facing normals and 0 NaNs for Ellipse across twist (untwisted and 90°)
+         and NaN-freedom across taper/shear/bend; Octagon verified NaN-free through the existing
+         faceted path.
+v1.17.1 - 2026-07-18 - Fixed a visible artifact on Helix's Line generator user asked about from a
+         screenshot: a dense fan of thin lines radiating from the axis across the ramp. Same root
+         cause as the striping fixed in v1.14.3 for the other five modes (flat shading's Mach-band
+         effect on a surface built from many thin facets — here 3 turns x 120 resolution = 360 of
+         them) but never applied to Helix, which was left flat-shaded at the time. Rebuilt
+         buildHelicalGeometry to compute analytic per-vertex normals (height/sweep tangent via
+         finite difference, generator/circumference tangent via finite difference across neighboring
+         generator SAMPLES — exact for Line's single straight segment, a good approximation of the
+         true tangent for Circle/Pipe's 24-sample circle) instead of Three.js's face-averaging
+         computeVertexNormals(), the same technique already used for the other five modes. Unlike
+         those modes' polygon-corner panels, Helix's generator direction has no real corners to
+         preserve — Line is one continuous edge, Circle/Pipe's 24-gon is meant to read as a smooth
+         round tube — so normals are shared/smooth across the whole generator direction, not split
+         per-panel. All three generators (Line/Circle/Pipe) now get smooth shading; verified
+         headlessly (Node + three.js) that normals are outward-facing and NaN-free for all three —
+         initially shipped with an inverted sign for Circle/Pipe's tube surface (100% inward-facing
+         against the tube's own centerline in testing), caught before release by testing orientation
+         against each generator's actual local reference rather than only the global axis, and fixed
+         by flipping the cross-product order.
+v1.17.0 - 2026-07-18 - Added Capital Gate (RMJM, Abu Dhabi, 2011 — 160m, 35 floors, 18° lean,
+         Guinness-certified world's farthest leaning man-made building) as a case study for Shear,
+         the first case study outside Twist. Generalized the case-study system (CASE_STUDIES/
+         loadCaseStudy, previously Twist-only) to a mode field + fields object per entry, so adding
+         a case study to any mode is now just a data entry rather than new plumbing. Named the honest
+         approximation directly in-app: the real building's lean isn't linear from the base (floor
+         plates stack straight through roughly the 12th storey, then lean at an accelerating rate
+         above that) the way SPIRA's Shear is, so this preset's constant linear shear simplifies the
+         real, non-uniform lean profile — height/floors/total lean angle are still sourced figures.
+         Bumped the shear offset slider range ±8m/±25ft -> ±60m/±200ft to fit (18° over 160m needs
+         ~52m of offset). Investigated and rejected two other candidates rather than force a fit: The
+         Bow (Calgary) turned out to curve in PLAN (crescent footprint extruded straight up) rather
+         than along its axis, so it doesn't actually match what Bend models geometrically; no
+         sufficiently well-documented pure-linear-taper or pure-Bend building was found yet either.
+v1.16.1 - 2026-07-18 - Fixed a blank canvas after loading the Cayan Tower case study (user report:
+         "Home leaves you blank space"). The camera's far clipping plane was a fixed 200 units —
+         harmless at classroom-model scale, but Cayan Tower is 306m tall internally (real meters,
+         not a scaled-down abstraction), so the entire model sat beyond where the camera could see
+         it once framed at a matching distance. Home's own framing math was already correct
+         (verified — it computed the right distance and target), it just handed the projection
+         matrix a far plane too small to contain the result, so re-clicking Home couldn't fix it
+         either. near/far now scale with the actual framed model size in all three framing functions
+         (Default/Top/Front) instead of a fixed range; verified numerically for Cayan Tower's real
+         scale (radius ~154m, camera distance ~494m) that the whole model now sits inside
+         [near, far] with margin on both sides.
+v1.16.0 - 2026-07-18 - Added two real-building case-study presets to Twist mode: Turning Torso
+         (Calatrava, Malmö, 2005 — 190m, 54 floors, 90° total twist, square/cube plan) and Cayan
+         Tower (SOM, Dubai, 2013 — 306m, 73 floors, 90° total twist, hexagonal plan). Both chosen
+         specifically because they're twist-ONLY buildings (no accompanying taper) — a genuinely
+         twisting-and-tapering building like Shanghai Tower would need combined operations this tool
+         doesn't support, and modeling it as twist-only would misrepresent its real form, so it was
+         deliberately left out rather than shipped as a shakier approximation. Height, floor count,
+         and total twist angle are sourced, documented figures for each building; footprint
+         width/depth are an illustrative estimate, not a published plan dimension, and the UI says
+         so directly under the buttons rather than presenting every number as equally verified.
+         Bumped the floors slider max 60→80 (Cayan needs 73) and the footprint width/depth slider
+         max 10m/33ft→30m/100ft (both buildings' illustrative footprints exceed the old max, sized
+         for classroom-scale massing) — both were previously capped well below real-building scale.
+v1.15.0 - 2026-07-18 - Added "Pipe" as a third Helix generator, closing the gap flagged since
+         v1.7.0/EXTENDED.md's Known Limitations: a circle held orthogonal to the helix's own
+         tangent at every point (the "true" constant-radius pipe), as opposed to Circle's simplified
+         circle-flat-in-the-meridian-plane version. Implemented via an analytic Frenet frame
+         (tangent/normal/binormal) along the helix centerline (pipeFrenetPoint) — well-defined and
+         smooth everywhere for a circular helix (constant curvature/torsion, C'·C''=0 identically),
+         no numerical rotation-minimizing-frame approximation needed. buildHelicalGeometry() was
+         refactored to accept an optional evalPoint callback so Pipe reuses the same topology/
+         winding/cap code as Line/Circle rather than a parallel implementation; outward-normal
+         orientation and NaN-freedom verified headlessly (Node + three.js) before wiring in. While
+         building this, found and fixed two related correctness gaps that would have silently used
+         the wrong formula for Pipe specifically: the point-labels overlay and the loft-profiles
+         JSON exporter both called computeLayerPoint directly rather than whichever formula actually
+         built what's on screen. Introduced a single per-rebuild layerPointFn (stored on lastBuild
+         as evalPoint) that both now use instead, which also incidentally fixes a latent FFD case
+         (point labels at y=0 previously used the raw undeformed profile coordinate rather than the
+         actual — possibly user-dragged — bottom control-point position). Updated the Reference
+         panel, Help/HUD text, README.md, and EXTENDED.md's Known Limitations and Helix math section
+         to describe Pipe instead of flagging it as unbuilt; historical changelog entries describing
+         it as unimplemented (v1.7.0 onward) are left as accurate record of the time.
+v1.14.3 - 2026-07-18 - Fixed the actual source of the surface striping v1.14.2's ring nudge didn't
+         fully address (user confirmed it was still visible with the Slice rings overlay off): flat
+         shading itself produces a Mach-band effect on a curved surface built from many thin flat
+         facets — a real optical illusion at any facet count, not fixed by resolution. Rebuilt
+         buildDeformedGeometry (twist/taper/shear/bend/ffd) to build each polygon-corner-to-corner
+         panel as its own private pair of vertex columns (rather than corner vertices shared between
+         neighboring panels) and assign each vertex an analytic normal computed directly from the
+         deformation's own tangent vectors (width tangent = exact edge vector for these four modes,
+         all of which are affine per height slice; height tangent = finite difference of
+         computeLayerPoint) rather than Three.js's face-averaging computeVertexNormals(). Side
+         material for these modes switched from flatShading:true to smooth shading, now safe because
+         analytic normals don't depend on which diagonal a quad happens to be split along — that
+         diagonal-dependence was the actual cause of the v1.12.2 herringbone bug flatShading had
+         been covering for. True polygon corners stay visually sharp since adjacent panels no longer
+         share vertices/normals at all. Helix (buildHelicalGeometry, still shared-vertex) is
+         untouched and keeps flatShading:true. Verified headlessly (Node + three.js): normals point
+         outward (dot ≥0.5–0.9+ against the known-radial direction) for a plain untwisted prism and
+         a 120°-twisted case, and produce no NaNs across taper/shear/bend/ffd.
+v1.14.2 - 2026-07-18 - Fixed two visual bugs. (1) Slice rings overlay was z-fighting with the mesh
+         surface it's coincident with, showing as fine horizontal striping/banding across the whole
+         solid, most visible at higher resolution (many closely-spaced rings). Each ring's vertices
+         are now nudged outward from the ring's own centroid before drawing, a generic post-hoc
+         offset (unlike floor lines' mode-aware 1.03x-profile recompute) since slice rings share the
+         same code path across every mode including helix. (2) Profile point labels (a,b,c.../
+         a1,b1,c1...) used a fixed 0.9x0.45 world-unit sprite size that read too small once the
+         solid itself was building-scale — sizeMult now scales the label with the model's own
+         height (Math.max(h*0.045, 1.4) floor), same proportional-with-a-floor pattern already used
+         for the origin marker and FFD handles.
+v1.14.1 - 2026-07-18 - Docs cleanup for a full upload package: removed the remaining figure/page
+         citations from developer-facing code comments (HELIX_GENERATORS, computeLayerPoint) —
+         v1.12.1 already fixed the user-visible Reference panel text, but these internal comments
+         used the same now-untrusted citation style and were left as-is at the time. Rewrote
+         README.md (dropped all figure/page citations, replaced the removed .sat export section
+         with the Dynamo pipeline) and added EXTENDED.md — architecture, the math per operation in
+         more depth, the full export pipeline (JSON schema + what the Dynamo script does and why),
+         verification methodology, and known limitations.
+v1.14.0 - 2026-07-18 - Removed the .sat (ACIS) export entirely. The Dynamo pipeline (loft-profiles
+         JSON + bundled import script, v1.13.0/.1) now covers the actual need — a genuinely curved,
+         single-pickable-face-per-side Revit form — properly, via Revit's own kernel, rather than
+         .sat's flat-faceted approximation for every curved mode. Removed the whole exporter (~300
+         lines: buildSatText, the ACIS SAT record writer, collectSideTrianglesM/collectCapTrianglesM,
+         buildFlatCapPolysW/buildShearSidePolysW, polyNormalNewell, satNum/satCtimeLike, exportSAT,
+         and the sidebar button/description), and updated every live reference to it (Help modal,
+         loft-profiles description, lastBuild's comment, the embedded Dynamo script's own docstring)
+         so nothing still points at a removed feature. Historical changelog entries about .sat
+         (v1.9.0 onward) are left as accurate record of what was actually built and fixed at the
+         time — not rewritten.
+v1.13.1 - 2026-07-18 - Added "Download Dynamo import script (.py)" next to the loft-profiles JSON
+         export — bundles the companion Dynamo Python-node script directly into the app (a static
+         string constant, byte-verified identical to the actual working script) instead of leaving
+         it something you only have from chat history. Same script handles both outcomes depending
+         on which document is active when it's run: a genuine loadable Mass Form if a Conceptual
+         Mass family document is active, or a one-off Mass-category DirectShape if a project is
+         active. Also fixed the loft-profiles export description, which still said "e.g. via a
+         pyRevit loft/sweep script" — corrected to Dynamo, since that's what actually got built.
+v1.13.0 - 2026-07-18 - Added "Export loft profiles (.json)" (Export section) — the first piece of
+         a planned pyRevit path for getting a genuinely curved, single-face-per-side form into
+         Revit natively, instead of importing a faceted .sat. Exports N evenly spaced cross-section
+         profiles up the height (N set by a new "loft profiles" slider, deliberately separate from
+         "resolution (slices)": a native Revit loft only needs enough profiles for Revit's own
+         curve fit to converge, not enough flat triangles to look smooth on screen — usually far
+         fewer). Reuses lastBuild + computeLayerPoint directly, the same source of truth the render
+         mesh and the .sat exporter both already use, so a pyRevit script consuming this file can't
+         drift out of sync with what's on screen the way re-deriving the twist/taper/bend math in
+         Python separately would risk. Same Y-up→Z-up axis remap as the .sat exporter. Verified
+         against Twist (bottom profile point unrotated, top point correctly rotated by α_max — the
+         actual rotation math checked by hand, not just record counts) and Helix's open generator
+         (closed:false in the payload, so a consuming script builds an open profile per level
+         instead of a closed loop). The pyRevit script itself — the piece that actually reads this
+         JSON and builds a native Revit loft/sweep — is the next step, not done yet.
+v1.12.2 - 2026-07-18 - Fixed a "pinched"/herringbone shading artifact visible on Bend/Taper (and
+         likely any curved mode) at higher resolutions — user spotted diagonal chevron-like light
+         patterns across the side faces that didn't correspond to any real edge. Root cause: the
+         side material used default smooth (Gouraud) shading, which averages vertex normals across
+         each quad's diagonal crease — and since v1.2.0 picks whichever diagonal is shorter
+         independently per quad (to minimize that crease), neighboring quads can end up split in
+         opposite directions, so smooth shading blends together inconsistently-oriented triangles
+         and produces a false light pattern with no matching geometry. Switched both the side and
+         cap materials to flatShading:true, so each triangle renders with its own true face normal
+         instead — also the more geometrically honest choice, since the surface actually is
+         faceted; raising the resolution slider (not normal-blending) is what should make it look
+         smoother.
+v1.12.1 - 2026-07-18 - Rewrote all six Reference panels (and two leftover HUD strings for Helix)
+         to drop every figure/page citation ("Fig. 13.3-13.6", "p.456", etc.) — user reported the
+         numbers don't correspond to anything real. Each panel now explains the operation
+         self-contained, grounded directly in the formula already shown in the header badge, rather
+         than pointing to an external page nobody can check. Also fixed the static HTML placeholder
+         under #referenceText (the pre-JS fallback shown for an instant before applyModeChrome()
+         runs) which still had the old citation-laden Twist text.
+v1.12.0 - 2026-07-18 - Two cleanup items. (1) Added a "?" help modal (header button) covering the
+         app's own controls — operations, editing values, Free's viewport handles, overlays, view
+         navigation, units, export — kept deliberately separate from the sidebar's Reference panel,
+         which cites the book figures the math is drawn from rather than explaining the UI. (2)
+         Fixed the camera needing a manual zoom-out on every load: the boot-time framing ran before
+         solidGroup had any geometry in it, so it fell back to a height-only heuristic that ignored
+         footprint width/depth entirely — a wide/deep sample (or a large-radius Helix) would load
+         mostly outside the frustum. frameCameraDefault() now computes an actual Three.js Box3 fit
+         (circumscribed-sphere radius against both horizontal and vertical FOV, 15% padding) and
+         runs once real geometry exists — hooked into the end of rebuild(), guarded to fire only on
+         the very first build so mid-session zoom/orbit is still left alone (the v1.7.1 decision).
+         The Home button already called the same function, so it inherits the fix for free. Sanity-
+         checked the fit formula against a wide/short case (20×3×20), a tall/narrow one (5×30×5),
+         and the old default-ish twist tower (2×28×2) — the last one's new fit distance (~38m) vs.
+         the old heuristic's actual camera-to-target distance (~15m) is a direct measure of how
+         under-framed the old default was.
+v1.11.0 - 2026-07-18 - .sat export: caps and Shear's side walls now export as single flat ACIS
+         faces instead of many small triangles, so picking one in Revit/AutoCAD selects the whole
+         plane. Caps are geometrically flat for every mode except Free/FFD (twist/bend rotate or
+         reposition a whole slice together, taper scales a whole slice by one shared factor, shear
+         translates a whole slice together — all affine-per-slice) — rebuilt directly from
+         computeLayerPoint at y=0/h as one N-sided face (concave star preset included), rather than
+         reading back the earcut-triangulated render mesh. Shear's side walls are flat for a
+         different, exact reason: shear is a single global affine transform of the whole solid, and
+         affine maps take planes to planes, so each side stays flat at any resolution — one quad
+         per profile edge instead of 2×segments triangles. Twist/Taper/Bend/Free's side walls (and
+         Helix) stay faceted — those are genuinely curved surfaces; collapsing them into one face
+         each would need real curved ACIS surfaces (spline/ruled spl_sur), which this project has
+         no verified worked-example syntax for and isn't attempting blind, given how many real
+         correctness bugs turned up even in the simple flat-facet writer (v1.10.1/.2/.3). Verified
+         headlessly against Shear (4 flat side quads + 2 flat caps, 0 open edges), Twist (48
+         triangulated side faces + 2 flat 4-sided caps — including a canary test confirming stray
+         triangulated cap data in the render mesh is correctly ignored in favor of the analytic
+         reconstruction), and FFD (correctly falls back to the old triangulated-cap path, since
+         FFD's caps aren't guaranteed planar). Not yet tested in Revit/AutoCAD themselves.
+v1.10.3 - 2026-07-18 - .sat now imports correctly in both AutoCAD Architecture 2026 and Revit
+         2026.1 (confirmed by user) — v1.10.2's version-consistency fix was the real blocker. Only
+         remaining issue: the solid came in lying on its side. SPIRA's whole pipeline (Three.js)
+         treats Y as vertical; ACIS/AutoCAD/Revit treat Z as vertical. Fixed by remapping
+         (x,y,z)->(x,-z,y) at the single point geometry enters the exporter (the weld() step), a
+         pure rotation so every downstream calculation (plane-surface normals, edge directions,
+         triangle winding) stays correct with no other changes needed. Verified with a tall test
+         box: height now lands on Z as expected.
+v1.10.2 - 2026-07-18 - Fixed .sat still not importing (Revit 2026 and AutoCAD Architecture 2026,
+         both silently, no error either time — reported after v1.10.1). Root cause: the header
+         declared ACIS version 700 while every token actually written follows pre-700 convention
+         (plain length-prefixed header strings rather than @-delimited ones; numeric 0/1 coedge
+         sense rather than "forward"/"reversed" strings) — version 700 is specifically where ACIS
+         switches both of those conventions. A version-aware reader picks its parsing grammar from
+         that header number before reading anything else, so declaring 700 while writing the older
+         grammar makes the whole file unrecognized, with no partial import and no error — matching
+         what was reported. Now declares 400, the one version every record layout has actually been
+         checked token-for-token against a real, fully-quoted worked example for, instead of 700,
+         which nothing here was ever verified against. Re-verified structurally; still not tested
+         against a live ACIS kernel, Revit, or AutoCAD directly from this environment.
+v1.10.1 - 2026-07-18 - Fixed the v1.10.0 .sat export failing to import in Revit 2016. Two record
+         fields had been left as null ($-1) where two independently-sourced, directly-quoted real
+         ACIS SAT examples both show an actual populated pointer: EDGE's back-reference to one of
+         its coedges, and VERTEX's back-reference to one of its edges — both now point to a real
+         record. Also dropped a speculative trailing "convexity" token on EDGE that isn't present
+         in the one directly-observed EDGE record I have (Spatial's own ACIS 4.0 doc example is
+         exactly 6 tokens, no 7th field); the earlier version added that token by inference from a
+         field list, not from a record actually seen in the wild. A single malformed/under-linked
+         entity is a plausible reason a strict reader imports nothing rather than partially
+         importing. Re-verified structurally (pointer resolution, coedge partner symmetry, backref
+         type-correctness) against both a closed-cube and an open-strip mesh; still not tested
+         against a live ACIS kernel or Revit itself.
+v1.10.0 - 2026-07-18 - Added "Export as .sat" (ACIS solid, sidebar Export section) — exports the
+         current mode's mesh as a faceted ACIS body: every on-screen triangle becomes one exact
+         planar ACIS face (no curve-fitting, since buildDeformedGeometry/buildHelicalGeometry
+         already only ever emit triangles). Weld-dedupes shared vertices, builds edge/coedge
+         partner links from triangle adjacency so closed modes (twist/taper/shear/bend/free) export
+         as a proper solid BODY and Helix's open ribbon/tube exports as an open sheet body (free
+         edges get a null partner coedge instead of a matching one). Coordinates convert meters →
+         millimeters on export. Targets ACIS SAT version 700, chosen to match the field layout
+         documented against real BricsCAD-exported files (mozman/ezdxf project) cross-checked with
+         Spatial's own SAT-format chapter for the header/BODY/LUMP/SHELL/FACE/LOOP records — not
+         verified against a live ACIS kernel, since none is available in this environment, so a
+         freshly exported file's first import into Rhino/AutoCAD/BricsCAD is the actual test.
+v1.9.0 - 2026-07-18 - Three requests. (1) A "Reset values" button on every operation's params block
+         (twist/taper/shear/bend/helix; FFD's existing "Reset control points" folded into the same
+         system), restoring that mode's own parameters — and, for the five height-based modes, floors/
+         floor-height too — to their original first-load defaults, not just whatever they were a
+         moment ago. One generic resetModeValues() driven by a MODE_DEFAULTS config, rather than six
+         near-identical click handlers; reuses the existing unit-aware sync*SliderRange() functions so
+         a reset in imperial mode still lands slider thumbs correctly. (2) Basic view navigation: Top
+         (plan view, straight down — camera.up swapped to a horizontal axis plus a sub-millimeter
+         position epsilon to dodge OrbitControls' known vertical-look singularity), Front (elevation,
+         horizontal), and Home (the existing height-scaled default framing, now factored into a named
+         frameCameraDefault() so the button can re-run it, not just boot code). Also added a small
+         always-visible marker + "0,0,0" label at the true world origin, tied to the Axis toggle but
+         shown even in FFD mode (which otherwise has no axis line of its own) as a fixed reference
+         point regardless of view or mode. (3) Fixed inward-facing surface normals — found by writing
+         a headless Node+three.js diagnostic (validated first against a known-correct THREE.BoxGeometry
+         to rule out a bug in the diagnostic itself, then run against the app's actual builder
+         functions) that checked every triangle's computed normal against a true outward-direction
+         reference: 0% of triangles were outward-facing, across every mode, preset, and cap — a
+         systematic winding-order bug, not a per-triangle mix, so the fix was a consistent reversal in
+         buildDeformedGeometry's side surface and cap triangulation. Re-ran the same diagnostic against
+         buildHelicalGeometry and found its side surface needed the OPPOSITE fix from the footprint
+         builder (kept at the original winding) — its generator point lives in a local (radial,
+         height-offset) frame embedded into world space by rotation, which has the opposite handedness
+         from a footprint profile's direct (x,z) placement, even though the two builders share the same
+         quad-strip index topology; the disk caps did need the same reversal as the footprint caps.
+         Verified 100% outward on every mode/preset/cap combination, including the helix tube's side
+         and both its end caps, before shipping.
+v1.8.0 - 2026-07-18 - Two requests: cross-section dimensions were fixed (each preset's arbitrary
+         hardcoded "unit" proportions) with no way to size a footprint in real dimensions, and every
+         numeric parameter was slider-only with no way to type an exact value. (1) Added Width (x) /
+         Depth (z) sliders to the Cross-section section, in real meters/feet, independent per axis.
+         PROFILES still generates each preset at its own natural proportions (the star's bounding box
+         isn't the square's), so a new scaledProfile() computes the raw shape's bounding box and
+         scales it — independently in x and z — to match these dimensions exactly; used by both
+         rebuild() and the FFD drag handler (which needs the identical scaled box to compute correct
+         default corner positions, or dragging would reference stale geometry). Defaults (2.0×2.0m)
+         reproduce the original hardcoded square exactly (scale factors of 1), and switching presets
+         now keeps a consistent real-world footprint size instead of jumping to whatever proportions
+         each preset happened to be coded with. (2) Every slider's value readout is now also a direct-
+         entry field: click it, type a number, Enter/blur commits, Escape cancels — one generic
+         bindEditableValue() driven by a declarative per-field config rather than duplicating parse/
+         commit logic 17 times. Length fields (shear offsets, floor height, all Helix dimensions, the
+         new footprint width/depth) accept feet-inches notation in imperial mode — 8'-6", 8' 6", 8ft
+         6in — via a new parseLengthInput(), since that's how architects actually write dimensions;
+         the edit box pre-fills with feet-inches (via formatFeetInches()) rather than decimal feet so
+         there's something sensible to already be looking at. Angle and ratio fields take plain
+         decimals; count fields (floors, turns, resolution) round to the nearest integer. Every typed
+         value is clamped to that field's current slider min/max (read live, since several sliders'
+         ranges themselves change with the metric/imperial toggle) before being committed, and commit
+         moves the slider thumb to match so typing and dragging can never fall out of sync with each
+         other.
+v1.7.1 - 2026-07-18 - Two fixes reported after v1.7.0 shipped. (1) Floor/turn lines were nearly
+         invisible: dark ink at 0.4 opacity, sitting exactly on the mesh surface it's drawn from —
+         low contrast against the blue-gray material plus z-fighting with coincident geometry. Now
+         paper-white at 0.95 opacity (every other overlay's accent color — brick, ochre, prussian —
+         was already spoken for, so a light line pops by brightness instead of competing on hue), and
+         nudged 3% outward from the actual profile before evaluating computeLayerPoint so it clears
+         the surface instead of fighting it. (2) Initial camera position was a fixed (9,8,11), tuned
+         to look right only at the original 8-floor/3.5m default — any taller loaded state (more
+         floors, a persisted session, or a multi-turn Helix) put the camera inside or right up against
+         the model on open. Camera framing now scales to totalHeightM() at boot (same direction ratio
+         as the old constant, distance = height × 0.58, floored at 6 so short/squat shapes don't put
+         the camera too close), computed after the localStorage state merge so a persisted tall model
+         frames correctly on load. Scoped to boot only — mid-session parameter changes (floors slider,
+         mode switches, etc.) don't touch the camera, so manual orbit/zoom during use is undisturbed.
+v1.7.0 - 2026-07-18 - Added Helix as a sixth operation (Fig. 9.53-9.60, ch.9 "Helical Surfaces" —
+         a different chapter from the other five, which are all ch.13 solid deformations). This is a
+         genuinely different construction, not a variant of the shared deformation engine: rather than
+         extruding a cross-section along the axis and deforming each slice, a generator/meridian curve
+         (radial, height-offset) is swept by true helical motion — rotation by u about axis A combined
+         with translation p·u along it — per the book's x(u,v)=X(v)cosu, y(u,v)=X(v)sinu, z(u,v)=z(v)+pu
+         (axis renamed to match this app's vertical y, so the meridian curve's own two coordinates are
+         radial X(v) and height-offset Y(v)). Two generator types, both using the book's simplified
+         meridian formula directly (no Frenet frame needed since each generator already lies flat in the
+         meridian plane at u=0): "Line" is the common/right helicoid (Fig. 9.56-9.57) — a straight
+         segment orthogonal to the axis, producing the classic open spiral ramp/staircase surface, with
+         adjustable inner radius (central void) and outer radius; "Circle" is a circle lying in the
+         meridian plane (Fig. 9.55, middle) — a winding tube/screw-column, capped with fan-triangulated
+         disks at both open ends. Deliberately did NOT implement the book's third variant (Fig. 9.55,
+         bottom) — a circle held orthogonal to the helix's own tangent, the "true" constant-radius pipe
+         — since that needs a moving Frenet frame along the 3D helix rather than the flat-meridian
+         formula; noted as a known omission in the in-app reference text rather than silently skipped.
+         Height here is turns × pitch (rise per full revolution) instead of floors × floor-height, so
+         the floors/floor-height controls are swapped for a Turns/Pitch block specific to this mode, and
+         "Floor lines" is reused as "Turn lines" (a ring — or for Line, a radial spoke — at each full
+         revolution) rather than adding a parallel overlay. A helicoid isn't a solid — the common
+         helicoid literally has a hole around the axis and zero thickness — so there's no volume to
+         report; the HUD's volume rows are repurposed to surface area (measured via triangle-area
+         summation over the built mesh, since no closed form exists here either) and generator length,
+         with the Cavalieri-style match row repurposed to name which book figure/surface is showing.
+         Ruling lines, slice rings, the fixed axis A overlay, and point labels all fall out of the
+         existing generic code paths for free (they only depend on the returned layer-positions/segs/n
+         shape, not on which mode built them) — only the floor→turn-lines ring code and point-label
+         bottom-anchor position needed small mode branches.
+v1.6.0 - 2026-07-17 - Added Free (freeform deformation) as a fifth operation (Fig. 13.17-13.20),
+         the odd one out architecturally: no axis, no base plane — the whole solid sits in a
+         bounding cuboid with 8 corner control points, and every point is a trilinear (1,1,1)
+         Bézier blend of all 8. Implemented with actual draggable 3D handles rather than sliders:
+         pointerdown raycasts against 8 brick sphere meshes, then drag intersects a camera-facing
+         plane through the grabbed handle (the standard screen-space-drag technique) and rebuilds
+         live on every pointermove. Control points are stored as offsets from their default corner
+         position rather than absolute coordinates, so they track sensibly when the preset or
+         height changes instead of going stale. FFD has no closed-form volume (an arbitrary warp
+         can do anything to it), so its volume readout comes from a new computeMeshVolume() —
+         numeric integration via the divergence theorem over the actual built triangles — the first
+         mode where the HUD number is measured rather than derived. Verified in a from-scratch
+         harness: control points at their defaults reproduce the straight prism's volume to
+         floating-point precision (the trilinear-interpolation-of-a-box's-own-corners identity),
+         and a dragged corner visibly changes it, across all four presets.
+v1.5.0 - 2026-07-17 - Added Bend as a fourth operation (Fig. 13.15-13.16, radial bending): the axis
+         A maps to a circular arc A1 of radius R = h/β, chosen so the arc length exactly equals the
+         original axis length h (the book's "typical" equal-length convention), and each slice is
+         rearranged into the plane normal to that arc with local x passed straight through per
+         Fig. 13.15. This required a real architecture change: bend is the first operation where the
+         height coordinate itself moves (a tower bent 180° ends up beside its own base, not above
+         it), so computeLayerPoint() now returns a full [x,y,z] instead of [x,z] with y assumed
+         unchanged — twist/taper/shear were updated to just pass y through in the new signature.
+         The axis overlay's "moved axis" renderer (built for shear) now generalizes to draw bend's
+         curved A1 by sampling computeLayerPoint at the on-axis point, reusing the same dashed-A/
+         solid-A1 treatment. Verified the isometry claim (fixed-height slices only rotate+translate,
+         never scale, so volume is preserved like twist) both analytically and against a from-scratch
+         mesh-volume integration across all four presets and six bend angles before shipping.
+v1.4.0 - 2026-07-17 - Added Shear as a third operation (Fig. 13.11-13.14), the odd one out: every
+         other operation here fixes the axis A, but shear moves it — each slice is translated
+         within its own plane, linear from (0,0) at the base to (Δx,Δy) at the top, so the axis's
+         image A1 is a straight line leaning away from A. The axis overlay now branches by mode:
+         twist/taper draw the single fixed axis as before, shear draws both the original A (dashed)
+         and A1 (solid, brick) to make the "the axis itself moves" distinction visible, not just
+         asserted in the reference text. Shear is volume-preserving like twist (translation is an
+         exact isometry, same as rotation) — verified this one to floating-point precision rather
+         than the ~0.3% triangulation tolerance taper needed, since a per-slice translation applied
+         to an already-planar prism wall keeps it exactly planar (an affine map of a plane is a
+         plane), so there's no discretization error to tolerate in the first place.
+v1.3.0 - 2026-07-17 - Added Tapering as a second operation (Fig. 13.7-13.9), selectable via a new
+         Operation switcher at the top of the sidebar. Refactored the twist-only geometry builder
+         into a generic buildDeformedGeometry() driven by a per-mode layer-point transform
+         (computeLayerPoint), so both operations share the ruled-surface construction, adaptive
+         diagonal triangulation, cross-section presets, floors/units, and all overlays. Taper scales
+         each slice independently in x (v(z)) and y (w(z)), linear from 1 at the base to user-set v,
+         w at the top; unlike twisting this does not preserve volume, so the HUD's volume-match
+         message now reports the actual percentage instead of always claiming equality. Volume
+         formula is closed-form (verified against numerical integration, not just asserted).
+v1.2.0 - 2026-07-17 - Real-world height + units, and a fix for the faint diagonal shading on the
+         twisted surface. Root cause of the shading: a twisted quad isn't planar, so splitting it
+         into two triangles always leaves a real (if subtle) crease along whichever diagonal is
+         chosen — now picks the shorter diagonal per quad, which minimizes it. Replaced the
+         abstract "height" slider with floors × floor-to-floor height (in real units) plus a
+         Metric/Imperial toggle that converts all HUD numbers (length, area, volume); added a
+         "floor lines" overlay showing actual story lines, independent of the computational
+         "slice rings" resolution overlay from v1.1.0.
+v1.1.0 - 2026-07-17 - Added a "slice rings" overlay: a thin ring drawn at every layer boundary,
+         so the resolution slider's effect is visible directly in the viewport instead of only
+         as a number in the sidebar. On by default alongside the existing ruling lines.
+v1.0.1 - 2026-07-17 - Fix: blank canvas on load. Three.js dropped the classic (non-module)
+         examples/js/controls addon somewhere around r150+ in favor of ES-module-only addons;
+         at r160 `THREE.OrbitControls` was undefined, so `new THREE.OrbitControls(...)` threw
+         and aborted the whole boot script before any WebGL draw call — sliders and HUD
+         labels rendered from static HTML, but rebuild() never ran once. Pinned both the core
+         library and the OrbitControls addon to r128 (matching the version used elsewhere in
+         the tool suite), which still ships the classic script-tag-loadable addon.
+v1.0.0 - 2026-07-17 - Initial build. Twist operation on four cross-section presets (square, triangle, hexagon, star),
+         live α_max / height / resolution controls, ruling-line + axis/base-plane overlays, and a live
+         Cavalieri volume readout showing the twisted and untwisted volumes matching exactly (the whole
+         point of the operation). Side surface built as a hand-rolled ruled BufferGeometry (per-slice
+         rotation of the profile about the vertical axis A), caps triangulated with THREE.ShapeUtils so
+         non-convex profiles (the star) still close correctly.
 -->
 <!DOCTYPE html>
 <html lang="en">
@@ -370,22 +1572,51 @@ Joe.K · axisbim.io
     display:flex; justify-content:space-between;
   }
 
+  /* v1.53.1: SPIRA's sidebar + 3D-viewport interaction (dozens of sliders, precise orbit/zoom
+     gestures) doesn't hold up on a phone-sized screen no matter how much the old stacked layout
+     shrank things — per Joe's request, replaced that attempt with a proper "use a larger screen"
+     block, the same pattern Modulor Mondrian already uses. 760px is unchanged from the old
+     breakpoint's threshold: every common tablet (iPad Mini at 768px and up) already falls above
+     it and gets the full desktop layout — this range was always effectively phone-only. */
+  #mobileBlock{
+    display:none; position:fixed; inset:0; z-index:200;
+    background:var(--cream); color:var(--ink);
+    flex-direction:column; align-items:center; justify-content:center;
+    text-align:center; padding:32px; gap:18px;
+  }
+  #mobileBlock svg{ width:72px; height:72px; }
+  #mobileBlock .mb-sq{ fill:none; stroke-width:3; }
+  #mobileBlock .mb-sq-1{ stroke:var(--brick); }
+  #mobileBlock .mb-sq-2{ stroke:var(--ochre); }
+  #mobileBlock .mb-sq-3{ stroke:var(--prussian); }
+  #mobileBlock .mb-sq-4{ stroke:var(--brick); }
+  #mobileBlock .mb-rule{ width:64px; height:1px; background:var(--line); }
+  #mobileBlock h1{ font-size:1.3rem; letter-spacing:0.08em; margin:0; }
+  #mobileBlock p{ max-width:320px; color:var(--muted); font-size:0.92rem; line-height:1.6; margin:0; }
+  #mobileBlock .mb-foot{ color:var(--muted); font-size:0.78rem; font-family:'Space Mono', monospace; }
+  #mobileBlock .mb-foot a{ color:inherit; }
+
   @media (max-width: 760px){
-    main{flex-direction:column;}
-    aside{width:100%; border-left:none; border-top:1px solid var(--line); max-height:46vh;}
-    #sidebarResizeHandle{display:none;} /* dragging a width makes no sense once aside stacks full-width below the viewport */
-    #hud{font-size:0.72rem; max-width:220px;}
-    #viewControls button{padding:6px 9px; font-size:0.68rem;}
-    /* v1.32.0: #warpLegend was added (v1.26.0) after this breakpoint existed and never got scaled
-       down with everything else — on a narrow phone the viewport itself is already squeezed (aside
-       takes up to 46vh at the bottom), so the legend's full 150px bar could crowd the Top/Front/Home
-       buttons sharing the same bottom row. */
-    #warpLegend{ left:8px; bottom:8px; padding:7px 9px; font-size:0.66rem; }
-    #warpLegend .warpLegendBar, #warpLegend .warpLegendTicks{ width:110px; }
+    #mobileBlock{ display:flex; }
+    header, main, footer{ display:none; }
   }
 </style>
 </head>
 <body>
+
+<div id="mobileBlock">
+  <svg viewBox="0 0 100 100">
+    <rect class="mb-sq mb-sq-1" x="30" y="30" width="40" height="40" transform="rotate(0 50 50)"/>
+    <rect class="mb-sq mb-sq-2" x="32" y="32" width="36" height="36" transform="rotate(15 50 50)"/>
+    <rect class="mb-sq mb-sq-3" x="34" y="34" width="32" height="32" transform="rotate(30 50 50)"/>
+    <rect class="mb-sq mb-sq-4" x="36" y="36" width="28" height="28" transform="rotate(45 50 50)"/>
+  </svg>
+  <div class="mb-rule"></div>
+  <h1>SPIRA</h1>
+  <p>This tool needs a tablet or desktop display for the sidebar and 3D viewport together. Please open it on a larger screen.</p>
+  <div class="mb-rule"></div>
+  <div class="mb-foot">Joe.K &nbsp;·&nbsp; <a href="https://axisbim.io" target="_blank" rel="noopener">axisbim.io</a></div>
+</div>
 
 <header>
   <h1>SPIRA</h1>
@@ -864,7 +2095,7 @@ Joe.K · axisbim.io
 <script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
 <script src="https://cdn.jsdelivr.net/npm/three@0.128.0/examples/js/controls/OrbitControls.js"></script>
 <script>
-const APP_VERSION = '1.53.0';
+const APP_VERSION = '1.53.1';
 
 // ---------- toast ----------
 let toastTimer=null;
@@ -4857,6 +6088,11 @@ EDITABLE_FIELDS.forEach(bindEditableValue);
 // ---------- render loop ----------
 function animate(){
   requestAnimationFrame(animate);
+  // v1.53.1: the whole app (including the canvas) is display:none behind #mobileBlock below 760px
+  // — still requestAnimationFrame every frame (cheap, and means rendering resumes instantly if the
+  // window's resized back above the breakpoint) but skip the actual per-frame work, so a phone
+  // doesn't keep a full WebGL render loop running against a screen nobody can see.
+  if(window.matchMedia('(max-width: 760px)').matches) return;
   if(animPlayer) tickAnimation();
   // v1.33.0: near/far used to only ever be set once per view-fit (Home/Top/Front/rebuild), sized
   // for that fit's own distance — scrolling to manually zoom out further than that could exceed
