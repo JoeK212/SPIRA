@@ -43,6 +43,5 @@ only ever be the *last* step; Free and Helix don't compound.
 Single HTML file, no build step, Three.js (r128) via CDN. Deployed via GitHub → Netlify
 continuous deployment.
 
-Live: https://spiraformdeform.netlify.app/
-
-Joe.K · axisbim.io
+---
+Joe.K · [axisbim.io](https://axisbim.io)
